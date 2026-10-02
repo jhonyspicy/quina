@@ -1,0 +1,127 @@
+:root {
+  color-scheme: dark;
+  --bg: #111318;
+  --surface: #1b1e25;
+  --border: #2c313b;
+  --text: #f2f3f5;
+  --muted: #9aa1ad;
+  --accent: #3b82f6;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --error: #f87171;
+  font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.screen {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+h1 { font-size: 20px; margin: 8px 0; }
+h2 { font-size: 16px; margin: 0 0 8px; }
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+}
+
+.badge {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.badge.ok { color: var(--ok); }
+.badge.warn { color: var(--warn); }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.clock { text-align: center; }
+.clock-level { margin: 0; color: var(--muted); }
+.clock-time { margin: 4px 0; font-size: 56px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.clock-status { margin: 0; color: var(--muted); }
+
+.note { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
+.error { color: var(--error); font-size: 14px; margin: 8px 0 0; }
+.success { color: var(--ok); font-size: 14px; margin: 8px 0 0; }
+
+button {
+  font: inherit;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #262a33;
+  color: var(--text);
+}
+button.primary {
+  width: 100%;
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+  font-size: 18px;
+}
+button:disabled { opacity: 0.4; }
+
+.row { display: flex; gap: 8px; align-items: center; }
+.row label { display: flex; align-items: center; gap: 4px; }
+
+input {
+  font: inherit;
+  width: 64px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.pin-input { width: 140px; letter-spacing: 0.2em; font-variant-numeric: tabular-nums; }
+
+.slide-track {
+  position: relative;
+  height: 64px;
+  border-radius: 32px;
+  background: #262a33;
+  border: 1px solid var(--border);
+  padding: 4px;
+  touch-action: none;
+  user-select: none;
+}
+.slide-track.disabled { opacity: 0.4; }
+.slide-label {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+.slide-knob {
+  position: relative;
+  width: 56px;
+  height: 54px;
+  border-radius: 28px;
+  background: var(--accent);
+  display: grid;
+  place-items: center;
+  font-size: 28px;
+  cursor: grab;
+}

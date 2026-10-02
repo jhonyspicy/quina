@@ -10,3 +10,4 @@ export {
   type Level,
   type Structure,
 } from "./clock.ts";
+export { formatRemaining } from "./format.ts";

@@ -2,7 +2,7 @@
 
 トーナメントクロックの状態と、そこから表示用の値を計算する純粋関数のパッケージ。実装は `packages/clock/src/clock.ts`。通信・保存・画面描画は扱わない。
 
-要件は[大会単位のリモコン・サイネージ接続と進行操作](../../openspec/changes/tournament-remote-signage/spec.md)の「待機・受付・開始」「現在の残り時間」に対応する。大会状態の管理元は大会ごとのDurable Objectとする方針（[ADR 0004](../adr/0004-cloudflare-durable-objects-and-initial-stack.md)）で、本パッケージはそこと表示端末の双方から使う想定だが、まだどのアプリからも利用されていない。
+要件は[大会単位のリモコン・サイネージ接続と進行操作](../../openspec/changes/tournament-remote-signage/spec.md)の「待機・受付・開始」「現在の残り時間」に対応する。大会状態の管理元は大会ごとのDurable Objectとする方針（[ADR 0004](../adr/0004-cloudflare-durable-objects-and-initial-stack.md)）で、本パッケージは `apps/api` の大会のDurable Objectと、`apps/remote`・`apps/signage` の双方から使う（[大会の接続と同期](realtime.md)）。
 
 ## 状態は基準だけを持つ
 
@@ -38,3 +38,7 @@
 ## 最終レベルの扱い
 
 最終レベルの時間を使い切ると、最終レベルのまま残り時間を0とし、`ClockView.finished` を `true` にする。状態は進行中のままで、大会終了の扱いは決めていない。
+
+## 残り時間の表示
+
+`formatRemaining` は残り時間を `分:秒`（1時間以上は `時:分:秒`）の文字列にする。秒未満は切り上げ、残り0.2秒は `0:01` と表示し、`0:00` になるのは残り時間を使い切ったときだけとする。

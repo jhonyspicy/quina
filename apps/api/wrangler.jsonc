@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "quina-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true },
+  "vars": {
+    // ログインなしで大会を作れる開発用エンドポイント。ローカル開発（pnpm dev）でのみ true にする
+    "ALLOW_DEV_ENDPOINTS": "false"
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "TOURNAMENT", "class_name": "TournamentDurableObject" },
+      { "name": "PAIRING", "class_name": "PairingDurableObject" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["TournamentDurableObject", "PairingDurableObject"] }
+  ]
+}
