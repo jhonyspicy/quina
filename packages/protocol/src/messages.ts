@@ -34,6 +34,27 @@ export type Entry = {
   cancelledBy: number | null;
 };
 
+/**
+ * 操作履歴に残す操作。状態を変えた操作だけを残し、表示に必要な内容を加える。
+ */
+export type HistoryAction =
+  | { type: "start" }
+  | { type: "pause" }
+  | { type: "resume" }
+  | { type: "setRemaining"; remainingMs: number; previousRemainingMs: number }
+  | { type: "pairSignage"; pin: string }
+  | { type: "addEntry"; entryId: number }
+  | { type: "cancelEntry"; entryId: number };
+
+/** 操作履歴の1件。リモコンは識別番号で表す */
+export type HistoryItem = {
+  /** 大会内で操作を受け付けた順の番号 */
+  seq: number;
+  at: number;
+  remoteNumber: number;
+  action: HistoryAction;
+};
+
 /** 大会のDurable Objectからリモコン・サイネージへ送るメッセージ */
 export type TournamentServerMessage =
   | {
@@ -49,6 +70,10 @@ export type TournamentServerMessage =
   | { type: "welcome"; remoteNumber: number }
   /** リモコンにだけ送る。エントリーの一覧（取り消し済みを含む、追加順） */
   | { type: "entries"; entries: Entry[] }
+  /** リモコンにだけ送る。接続直後に操作履歴の全件を古い順に送る */
+  | { type: "history"; items: HistoryItem[] }
+  /** リモコンにだけ送る。操作履歴に加わった1件 */
+  | { type: "historyAppended"; item: HistoryItem }
   | { type: "pairSignageResult"; pin: string; ok: boolean };
 
 /** PIN接続用のDurable Objectから未接続のサイネージへ送るメッセージ */

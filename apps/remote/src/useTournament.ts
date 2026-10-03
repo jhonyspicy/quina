@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ClockState, Structure } from "@quina/clock";
-import type { Entry, RemoteAction, TournamentServerMessage } from "@quina/protocol";
+import type { Entry, HistoryItem, RemoteAction, TournamentServerMessage } from "@quina/protocol";
 import {
   connectTournament,
   createServerClock,
@@ -21,6 +21,7 @@ export function useTournament(tournamentId: string) {
     entryCount: number;
   } | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
   const [notFound, setNotFound] = useState(false);
   const [pairResult, setPairResult] = useState<PairResult | null>(null);
   const [remoteNumber, setRemoteNumber] = useState<number | null>(null);
@@ -43,6 +44,12 @@ export function useTournament(tournamentId: string) {
             structure: message.structure,
             entryCount: message.entryCount,
           });
+        } else if (message.type === "history") {
+          setHistory(message.items);
+        } else if (message.type === "historyAppended") {
+          setHistory((items) =>
+            items.some((item) => item.seq === message.item.seq) ? items : [...items, message.item],
+          );
         } else if (message.type === "entries") {
           setEntries(message.entries);
         } else if (message.type === "welcome") {
@@ -60,5 +67,15 @@ export function useTournament(tournamentId: string) {
   const send = (action: RemoteAction) =>
     connection.current?.send({ ...action, opId: randomId() }) ?? false;
 
-  return { status, snapshot, entries, notFound, pairResult, remoteNumber, serverClock, send };
+  return {
+    status,
+    snapshot,
+    entries,
+    history,
+    notFound,
+    pairResult,
+    remoteNumber,
+    serverClock,
+    send,
+  };
 }

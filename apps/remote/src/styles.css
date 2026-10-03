@@ -153,3 +153,16 @@ button.link {
   color: var(--accent);
   font-size: 14px;
 }
+
+.history summary { font-weight: 600; cursor: pointer; }
+.history-list { list-style: none; margin: 12px 0 0; padding: 0; }
+.history-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+}
+.history-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.history-remote { color: var(--muted); }

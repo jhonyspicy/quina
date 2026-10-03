@@ -346,3 +346,89 @@ describe("エントリー", () => {
     expect(await signage.next("state")).toMatchObject({ entryCount: 1 });
   });
 });
+
+describe("操作履歴", () => {
+  it("接続したリモコンに、それまでの履歴を古い順に送る", async () => {
+    const id = await createTournament();
+    const a = await connectRemote(id);
+    expect(await a.next("history")).toEqual({ type: "history", items: [] });
+    a.command({ type: "addEntry" });
+    a.command({ type: "start" });
+    await a.next("historyAppended");
+    await a.next("historyAppended");
+
+    const b = await connectRemote(id);
+    const { items } = await b.next("history");
+    expect(items.map((item) => [item.remoteNumber, item.action])).toEqual([
+      [1, { type: "addEntry", entryId: 1 }],
+      [1, { type: "start" }],
+    ]);
+    expect(items[0]!.seq).toBeLessThan(items[1]!.seq);
+  });
+
+  it("どのリモコンの操作かを、全リモコンへ1件ずつ送る", async () => {
+    const id = await createTournament();
+    const a = await connectRemote(id);
+    const b = await connectRemote(id);
+    await a.next("history");
+    await b.next("history");
+
+    b.command({ type: "start" });
+    expect(await a.next("historyAppended")).toMatchObject({
+      item: { remoteNumber: 2, action: { type: "start" }, at: expect.any(Number) },
+    });
+    expect(await b.next("historyAppended")).toMatchObject({ item: { remoteNumber: 2 } });
+  });
+
+  it("残り時間の変更は変更前と変更後の残り時間を残す", async () => {
+    const id = await createTournament();
+    const remote = await connectRemote(id);
+    remote.command({ type: "start" });
+    remote.command({ type: "pause" });
+    await remote.next("historyAppended");
+    await remote.next("historyAppended");
+
+    remote.command({ type: "setRemaining", remainingMs: 60_000 });
+    const { item } = await remote.next("historyAppended");
+    expect(item.action).toMatchObject({ type: "setRemaining", remainingMs: 60_000 });
+    if (item.action.type !== "setRemaining") throw new Error("expected setRemaining");
+    expect(item.action.previousRemainingMs).toBeGreaterThan(19 * 60_000);
+  });
+
+  it("他のリモコンが追加したエントリーの取り消しは、追加と取り消しの両方を残す", async () => {
+    const id = await createTournament();
+    const a = await connectRemote(id);
+    const b = await connectRemote(id);
+    a.command({ type: "addEntry" });
+    await b.next("historyAppended");
+    b.command({ type: "cancelEntry", entryId: 1 });
+    await b.next("historyAppended");
+
+    const c = await connectRemote(id);
+    const { items } = await c.next("history");
+    expect(items.map((item) => [item.remoteNumber, item.action])).toEqual([
+      [1, { type: "addEntry", entryId: 1 }],
+      [2, { type: "cancelEntry", entryId: 1 }],
+    ]);
+  });
+
+  it("状態を変えなかった操作は履歴に残さない", async () => {
+    const id = await createTournament();
+    const remote = await connectRemote(id);
+    const opId = remote.command({ type: "start" });
+    await remote.next("historyAppended");
+
+    remote.command({ type: "start" });
+    remote.command({ type: "start" }, opId);
+    remote.command({ type: "resume" });
+    remote.command({ type: "cancelEntry", entryId: 1 });
+    remote.command({ type: "pairSignage", pin: "000000" });
+    await remote.next("pairSignageResult");
+    remote.command({ type: "pause" });
+    expect(await remote.next("historyAppended")).toMatchObject({ item: { action: { type: "pause" } } });
+
+    const other = await connectRemote(id);
+    const { items } = await other.next("history");
+    expect(items.map((item) => item.action.type)).toEqual(["start", "pause"]);
+  });
+});

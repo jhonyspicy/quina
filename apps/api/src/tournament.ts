@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   createClock,
+  getClockView,
   pause,
   resume,
   setRemaining,
@@ -12,6 +13,8 @@ import {
   CLOSE_TOURNAMENT_NOT_FOUND,
   isId,
   type Entry,
+  type HistoryAction,
+  type HistoryItem,
   parseRemoteCommand,
   type RemoteAction,
   type RemoteCommand,
@@ -37,33 +40,14 @@ const STORAGE_KEY = "tournament";
  * ストレージ:
  * - KVの `tournament`: 大会ID・ストラクチャー・時計の状態
  * - `remotes` テーブル: 端末IDごとのリモコン識別番号
- * - `operations` テーブル: 受け付けた操作。同じ操作IDを二度処理しないために使う
+ * - `operations` テーブル: 受け付けた操作。同じ操作IDを二度処理しないために使い、状態を変えた操作は
+ *   `history` 列に操作履歴の内容を持つ
  * - `entries` テーブル: エントリー。取り消しても行は残し、取り消した端末と時刻を記録する
  */
 export class TournamentDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    ctx.blockConcurrencyWhile(async () => {
-      ctx.storage.sql.exec(`
-        CREATE TABLE IF NOT EXISTS remotes (
-          device_id TEXT PRIMARY KEY,
-          number INTEGER NOT NULL UNIQUE
-        );
-        CREATE TABLE IF NOT EXISTS operations (
-          op_id TEXT PRIMARY KEY,
-          device_id TEXT NOT NULL,
-          action TEXT NOT NULL,
-          received_at INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS entries (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          added_at INTEGER NOT NULL,
-          added_by TEXT NOT NULL,
-          cancelled_at INTEGER,
-          cancelled_by TEXT
-        );
-      `);
-    });
+    ctx.blockConcurrencyWhile(async () => migrate(ctx.storage));
   }
 
   /** 大会を準備する。時計は開始しない。準備済みなら何もしない。 */
@@ -95,6 +79,7 @@ export class TournamentDurableObject extends DurableObject<Env> {
       send(server, { type: "welcome", remoteNumber });
       send(server, this.stateMessage(tournament));
       send(server, this.entriesMessage());
+      send(server, { type: "history", items: this.historyItems() });
     } else {
       server.serializeAttachment({ role } satisfies Attachment);
       send(server, this.stateMessage(tournament));
@@ -112,28 +97,45 @@ export class TournamentDurableObject extends DurableObject<Env> {
     if (!tournament) return;
     if (!this.recordOperation(command, attachment.deviceId)) return;
 
-    if (command.type === "pairSignage") {
-      const ok = await this.env.PAIRING.getByName(command.pin).claim(tournament.id);
-      send(ws, { type: "pairSignageResult", pin: command.pin, ok });
-      return;
-    }
+    const history = await this.apply(command, tournament, attachment.deviceId, ws);
+    if (history) this.appendHistory(command.opId, history);
+  }
 
-    if (command.type === "addEntry" || command.type === "cancelEntry") {
-      const changed =
-        command.type === "addEntry"
-          ? this.addEntry(attachment.deviceId)
-          : this.cancelEntry(command.entryId, attachment.deviceId);
-      if (!changed) return;
-      this.broadcast(this.stateMessage(tournament));
-      this.broadcast(this.entriesMessage(), "remote");
-      return;
+  /** 操作を処理する。状態を変えた場合は操作履歴に残す内容を、変えなかった場合は `null` を返す。 */
+  private async apply(
+    command: RemoteCommand,
+    tournament: Tournament,
+    deviceId: string,
+    ws: WebSocket,
+  ): Promise<HistoryAction | null> {
+    switch (command.type) {
+      case "pairSignage": {
+        const ok = await this.env.PAIRING.getByName(command.pin).claim(tournament.id);
+        send(ws, { type: "pairSignageResult", pin: command.pin, ok });
+        return ok ? { type: "pairSignage", pin: command.pin } : null;
+      }
+      case "addEntry": {
+        const entryId = this.addEntry(deviceId);
+        this.broadcastEntries(tournament);
+        return { type: "addEntry", entryId };
+      }
+      case "cancelEntry": {
+        if (!this.cancelEntry(command.entryId, deviceId)) return null;
+        this.broadcastEntries(tournament);
+        return { type: "cancelEntry", entryId: command.entryId };
+      }
+      default: {
+        const now = Date.now();
+        const clock = applyClockAction(tournament, command, now);
+        if (clock === tournament.clock) return null;
+        const next = { ...tournament, clock };
+        this.ctx.storage.kv.put<Tournament>(STORAGE_KEY, next);
+        this.broadcast(this.stateMessage(next));
+        if (command.type !== "setRemaining") return { type: command.type };
+        const previous = getClockView(tournament.clock, tournament.structure, now).remainingMs ?? 0;
+        return { type: "setRemaining", remainingMs: command.remainingMs, previousRemainingMs: previous };
+      }
     }
-
-    const clock = applyClockAction(tournament, command, Date.now());
-    if (clock === tournament.clock) return;
-    const next = { ...tournament, clock };
-    this.ctx.storage.kv.put<Tournament>(STORAGE_KEY, next);
-    this.broadcast(this.stateMessage(next));
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
@@ -159,6 +161,39 @@ export class TournamentDurableObject extends DurableObject<Env> {
       .one().number;
   }
 
+  /** 状態を変えた操作の履歴を保存し、リモコンへ送る */
+  private appendHistory(opId: string, action: HistoryAction): void {
+    const item = this.ctx.storage.sql
+      .exec<HistoryRow>(
+        `UPDATE operations SET history = ? WHERE op_id = ?
+         RETURNING rowid AS seq, received_at AS at, device_id AS deviceId, history`,
+        JSON.stringify(action),
+        opId,
+      )
+      .toArray()
+      .map((row) => this.toHistoryItem(row))[0];
+    if (item) this.broadcast({ type: "historyAppended", item }, "remote");
+  }
+
+  private historyItems(): HistoryItem[] {
+    return this.ctx.storage.sql
+      .exec<HistoryRow>(
+        `SELECT rowid AS seq, received_at AS at, device_id AS deviceId, history
+         FROM operations WHERE history IS NOT NULL ORDER BY rowid`,
+      )
+      .toArray()
+      .map((row) => this.toHistoryItem(row));
+  }
+
+  private toHistoryItem(row: HistoryRow): HistoryItem {
+    return {
+      seq: row.seq,
+      at: row.at,
+      remoteNumber: this.remoteNumberFor(row.deviceId),
+      action: JSON.parse(row.history) as HistoryAction,
+    };
+  }
+
   /** 操作を記録する。同じ操作IDをすでに受け付けていれば記録せず `false` を返す。 */
   private recordOperation({ opId, ...action }: RemoteCommand, deviceId: string): boolean {
     const inserted = this.ctx.storage.sql.exec(
@@ -171,13 +206,20 @@ export class TournamentDurableObject extends DurableObject<Env> {
     return inserted.rowsWritten > 0;
   }
 
-  private addEntry(deviceId: string): boolean {
-    this.ctx.storage.sql.exec(
-      "INSERT INTO entries (added_at, added_by) VALUES (?, ?)",
-      Date.now(),
-      deviceId,
-    );
-    return true;
+  /** エントリーを追加し、その番号を返す */
+  private addEntry(deviceId: string): number {
+    return this.ctx.storage.sql
+      .exec<{ id: number }>(
+        "INSERT INTO entries (added_at, added_by) VALUES (?, ?) RETURNING id",
+        Date.now(),
+        deviceId,
+      )
+      .one().id;
+  }
+
+  private broadcastEntries(tournament: Tournament): void {
+    this.broadcast(this.stateMessage(tournament));
+    this.broadcast(this.entriesMessage(), "remote");
   }
 
   /** 取り消されていないエントリーを取り消す。存在しない・取り消し済みなら `false` */
@@ -225,6 +267,38 @@ export class TournamentDurableObject extends DurableObject<Env> {
       }
     }
   }
+}
+
+type HistoryRow = { seq: number; at: number; deviceId: string; history: string };
+
+/**
+ * ストレージのテーブルの変更。適用済みの数をKVの `schemaVersion` に保存し、未適用の変更だけを順に適用する。
+ */
+const MIGRATIONS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS remotes (
+     device_id TEXT PRIMARY KEY,
+     number INTEGER NOT NULL UNIQUE
+   );
+   CREATE TABLE IF NOT EXISTS operations (
+     op_id TEXT PRIMARY KEY,
+     device_id TEXT NOT NULL,
+     action TEXT NOT NULL,
+     received_at INTEGER NOT NULL
+   );
+   CREATE TABLE IF NOT EXISTS entries (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     added_at INTEGER NOT NULL,
+     added_by TEXT NOT NULL,
+     cancelled_at INTEGER,
+     cancelled_by TEXT
+   );`,
+  `ALTER TABLE operations ADD COLUMN history TEXT;`,
+];
+
+async function migrate(storage: DurableObjectStorage): Promise<void> {
+  const applied = storage.kv.get<number>("schemaVersion") ?? 0;
+  for (const migration of MIGRATIONS.slice(applied)) storage.sql.exec(migration);
+  storage.kv.put("schemaVersion", MIGRATIONS.length);
 }
 
 function applyClockAction(

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
-import type { Entry } from "@quina/protocol";
 import { formatRemaining, getClockView } from "@quina/clock";
+import type { Entry, HistoryAction, HistoryItem } from "@quina/protocol";
 import { createDevTournament } from "./api.ts";
 import { SlideToStart } from "./SlideToStart.tsx";
 import { useNow } from "./useNow.ts";
@@ -60,7 +60,7 @@ function CreateTournament({ onCreated }: { onCreated(id: string): void }) {
 }
 
 function Remote({ tournamentId }: { tournamentId: string }) {
-  const { status, snapshot, entries, notFound, pairResult, remoteNumber, serverClock, send } =
+  const { status, snapshot, entries, history, notFound, pairResult, remoteNumber, serverClock, send } =
     useTournament(tournamentId);
   const now = useNow(serverClock.now);
   const online = status === "open";
@@ -141,6 +141,8 @@ function Remote({ tournamentId }: { tournamentId: string }) {
         result={pairResult}
         onSubmit={(pin) => send({ type: "pairSignage", pin })}
       />
+
+      <History items={history} />
     </main>
   );
 }
@@ -203,8 +205,52 @@ function Entries({
   );
 }
 
-function formatTime(epochMs: number): string {
-  return new Date(epochMs).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+function History({ items }: { items: HistoryItem[] }) {
+  return (
+    <details className="card history">
+      <summary>操作履歴（{items.length}件）</summary>
+      {items.length === 0 ? (
+        <p className="note">まだ操作はありません。</p>
+      ) : (
+        <ol className="history-list">
+          {[...items].reverse().map((item) => (
+            <li key={item.seq}>
+              <span className="history-time">{formatTime(item.at, true)}</span>
+              <span className="history-remote">リモコン{item.remoteNumber}</span>
+              <span>{describeAction(item.action)}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </details>
+  );
+}
+
+function describeAction(action: HistoryAction): string {
+  switch (action.type) {
+    case "start":
+      return "開始";
+    case "pause":
+      return "一時停止";
+    case "resume":
+      return "再開";
+    case "setRemaining":
+      return `残り時間を ${formatRemaining(action.previousRemainingMs)} → ${formatRemaining(action.remainingMs)} に変更`;
+    case "pairSignage":
+      return `サイネージを接続（PIN ${action.pin}）`;
+    case "addEntry":
+      return `エントリー #${action.entryId} を追加`;
+    case "cancelEntry":
+      return `エントリー #${action.entryId} を取消`;
+  }
+}
+
+function formatTime(epochMs: number, withSeconds = false): string {
+  return new Date(epochMs).toLocaleTimeString("ja-JP", {
+    hour: "2-digit",
+    minute: "2-digit",
+    ...(withSeconds ? { second: "2-digit" } : {}),
+  });
 }
 
 function RemainingForm({ disabled, onSubmit }: { disabled: boolean; onSubmit(ms: number): void }) {
