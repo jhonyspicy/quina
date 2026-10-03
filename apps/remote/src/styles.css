@@ -166,3 +166,18 @@ button.link {
 }
 .history-time { color: var(--muted); font-variant-numeric: tabular-nums; }
 .history-remote { color: var(--muted); }
+
+.setup { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
+.setup .note { margin: 0; }
+.qr { background: #fff; border-radius: 8px; padding: 8px; image-rendering: pixelated; }
+.url { word-break: break-all; font-size: 13px; color: var(--muted); margin: 0; }
+.note.small { font-size: 12px; }
+a.button {
+  display: inline-block;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 600;
+}

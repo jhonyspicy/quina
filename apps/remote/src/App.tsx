@@ -1,31 +1,44 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { formatRemaining, getClockView } from "@quina/clock";
 import type { Entry, HistoryAction, HistoryItem } from "@quina/protocol";
 import { createDevTournament } from "./api.ts";
+import { Setup } from "./Setup.tsx";
 import { SlideToStart } from "./SlideToStart.tsx";
 import { useNow } from "./useNow.ts";
 import { useTournament } from "./useTournament.ts";
 
 const TOURNAMENT_PARAM = "t";
+const SETUP_PARAM = "setup";
 
 export function App() {
-  const [tournamentId, setTournamentId] = useState(
-    () => new URLSearchParams(location.search).get(TOURNAMENT_PARAM),
-  );
+  const [params, setParams] = useState(() => new URLSearchParams(location.search));
+  const tournamentId = params.get(TOURNAMENT_PARAM);
+  const setupId = params.get(SETUP_PARAM);
 
-  if (!tournamentId) {
-    return (
-      <CreateTournament
-        onCreated={(id) => {
-          const url = new URL(location.href);
-          url.searchParams.set(TOURNAMENT_PARAM, id);
-          history.replaceState(null, "", url);
-          setTournamentId(id);
-        }}
-      />
-    );
-  }
-  return <Remote tournamentId={tournamentId} />;
+  useEffect(() => {
+    const onPopState = () => setParams(new URLSearchParams(location.search));
+    addEventListener("popstate", onPopState);
+    return () => removeEventListener("popstate", onPopState);
+  }, []);
+
+  if (tournamentId) return <Remote tournamentId={tournamentId} />;
+  if (setupId) return <Setup tournamentId={setupId} remoteUrl={remoteUrlFor(setupId)} />;
+  return (
+    <CreateTournament
+      onCreated={(id) => {
+        const url = new URL(location.href);
+        url.search = new URLSearchParams({ [SETUP_PARAM]: id }).toString();
+        history.pushState(null, "", url);
+        setParams(url.searchParams);
+      }}
+    />
+  );
+}
+
+function remoteUrlFor(tournamentId: string): string {
+  const url = new URL(location.pathname, location.origin);
+  url.searchParams.set(TOURNAMENT_PARAM, tournamentId);
+  return url.toString();
 }
 
 function CreateTournament({ onCreated }: { onCreated(id: string): void }) {
@@ -48,10 +61,10 @@ function CreateTournament({ onCreated }: { onCreated(id: string): void }) {
       <h1>Quina リモコン</h1>
       <section className="card">
         <p className="note">
-          開発用の画面です。ログインやストラクチャー設定の代わりに、固定のストラクチャー（20分×10レベル）で大会を作ります。
+          開発用の画面です。管理画面・ログイン・ストラクチャー設定の代わりに、固定のストラクチャー（20分×10レベル）で大会を準備し、スタッフ接続用のQRを表示します。
         </p>
         <button className="primary" onClick={create} disabled={busy}>
-          開発用の大会を作成
+          開発用の大会を準備
         </button>
         {error && <p className="error">{error}</p>}
       </section>
