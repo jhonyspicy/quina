@@ -10,13 +10,13 @@ import {
 } from "@quina/clock";
 import {
   CLOSE_TOURNAMENT_NOT_FOUND,
+  isId,
   parseRemoteCommand,
+  type RemoteAction,
   type RemoteCommand,
   type TournamentServerMessage,
 } from "@quina/protocol";
 import { closeQuietly } from "./pairing.ts";
-
-export type Role = "remote" | "signage";
 
 type Tournament = {
   id: string;
@@ -24,25 +24,54 @@ type Tournament = {
   clock: ClockState;
 };
 
+/** 接続ごとにWebSocketへ添付する情報。休止（hibernation）から復帰しても残る */
+type Attachment = { role: "remote"; deviceId: string; remoteNumber: number } | { role: "signage" };
+
 const STORAGE_KEY = "tournament";
 
 /**
  * 大会1件につき1インスタンス。大会の状態の唯一の正として、リモコンからの操作を順に処理し、
  * 接続中のリモコン・サイネージへ最新の状態を配信する。
+ *
+ * ストレージ:
+ * - KVの `tournament`: 大会ID・ストラクチャー・時計の状態
+ * - `remotes` テーブル: 端末IDごとのリモコン識別番号
+ * - `operations` テーブル: 受け付けた操作。同じ操作IDを二度処理しないために使う
  */
 export class TournamentDurableObject extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    ctx.blockConcurrencyWhile(async () => {
+      ctx.storage.sql.exec(`
+        CREATE TABLE IF NOT EXISTS remotes (
+          device_id TEXT PRIMARY KEY,
+          number INTEGER NOT NULL UNIQUE
+        );
+        CREATE TABLE IF NOT EXISTS operations (
+          op_id TEXT PRIMARY KEY,
+          device_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          received_at INTEGER NOT NULL
+        );
+      `);
+    });
+  }
+
   /** 大会を準備する。時計は開始しない。準備済みなら何もしない。 */
   async prepare(id: string, structure: Structure): Promise<void> {
-    if (await this.load()) return;
-    await this.ctx.storage.put<Tournament>(STORAGE_KEY, { id, structure, clock: createClock() });
+    if (this.load()) return;
+    this.ctx.storage.kv.put<Tournament>(STORAGE_KEY, { id, structure, clock: createClock() });
   }
 
   override async fetch(request: Request): Promise<Response> {
-    const role = new URL(request.url).searchParams.get("role");
+    const params = new URL(request.url).searchParams;
+    const role = params.get("role");
+    const deviceId = params.get("device");
     if (role !== "remote" && role !== "signage") return new Response("invalid role", { status: 400 });
+    if (role === "remote" && !isId(deviceId)) return new Response("invalid device", { status: 400 });
 
     const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
-    const tournament = await this.load();
+    const tournament = this.load();
     if (!tournament) {
       // ブラウザはHTTPのステータスを読めないため、接続後にクローズコードで伝える
       server.accept();
@@ -51,17 +80,26 @@ export class TournamentDurableObject extends DurableObject<Env> {
     }
 
     this.ctx.acceptWebSocket(server, [role]);
+    if (role === "remote") {
+      const remoteNumber = this.remoteNumberFor(deviceId!);
+      server.serializeAttachment({ role, deviceId: deviceId!, remoteNumber } satisfies Attachment);
+      send(server, { type: "welcome", remoteNumber });
+    } else {
+      server.serializeAttachment({ role } satisfies Attachment);
+    }
     send(server, stateMessage(tournament));
     return new Response(null, { status: 101, webSocket: client });
   }
 
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    if (!this.ctx.getTags(ws).includes("remote") || typeof message !== "string") return;
+    const attachment = ws.deserializeAttachment() as Attachment | null;
+    if (attachment?.role !== "remote" || typeof message !== "string") return;
     const command = parseRemoteCommand(message);
     if (!command) return;
 
-    const tournament = await this.load();
+    const tournament = this.load();
     if (!tournament) return;
+    if (!this.recordOperation(command, attachment.deviceId)) return;
 
     if (command.type === "pairSignage") {
       const ok = await this.env.PAIRING.getByName(command.pin).claim(tournament.id);
@@ -69,10 +107,10 @@ export class TournamentDurableObject extends DurableObject<Env> {
       return;
     }
 
-    const clock = applyClockCommand(tournament, command, Date.now());
+    const clock = applyClockAction(tournament, command, Date.now());
     if (clock === tournament.clock) return;
     const next = { ...tournament, clock };
-    await this.ctx.storage.put<Tournament>(STORAGE_KEY, next);
+    this.ctx.storage.kv.put<Tournament>(STORAGE_KEY, next);
     this.broadcast(stateMessage(next));
   }
 
@@ -80,8 +118,35 @@ export class TournamentDurableObject extends DurableObject<Env> {
     closeQuietly(ws, code, reason);
   }
 
-  private async load(): Promise<Tournament | undefined> {
-    return this.ctx.storage.get<Tournament>(STORAGE_KEY);
+  private load(): Tournament | undefined {
+    return this.ctx.storage.kv.get<Tournament>(STORAGE_KEY);
+  }
+
+  /** 端末IDに対応する識別番号を返す。初めての端末には、この大会で次の番号を割り当てる。 */
+  private remoteNumberFor(deviceId: string): number {
+    const sql = this.ctx.storage.sql;
+    const existing = sql
+      .exec<{ number: number }>("SELECT number FROM remotes WHERE device_id = ?", deviceId)
+      .toArray()[0];
+    if (existing) return existing.number;
+    return sql
+      .exec<{ number: number }>(
+        "INSERT INTO remotes (device_id, number) SELECT ?, COALESCE(MAX(number), 0) + 1 FROM remotes RETURNING number",
+        deviceId,
+      )
+      .one().number;
+  }
+
+  /** 操作を記録する。同じ操作IDをすでに受け付けていれば記録せず `false` を返す。 */
+  private recordOperation({ opId, ...action }: RemoteCommand, deviceId: string): boolean {
+    const inserted = this.ctx.storage.sql.exec(
+      "INSERT INTO operations (op_id, device_id, action, received_at) VALUES (?, ?, ?, ?) ON CONFLICT (op_id) DO NOTHING",
+      opId,
+      deviceId,
+      JSON.stringify(action),
+      Date.now(),
+    );
+    return inserted.rowsWritten > 0;
   }
 
   private broadcast(message: TournamentServerMessage): void {
@@ -95,12 +160,12 @@ export class TournamentDurableObject extends DurableObject<Env> {
   }
 }
 
-function applyClockCommand(
+function applyClockAction(
   { clock, structure }: Tournament,
-  command: Exclude<RemoteCommand, { type: "pairSignage" }>,
+  action: Exclude<RemoteAction, { type: "pairSignage" }>,
   now: number,
 ): ClockState {
-  switch (command.type) {
+  switch (action.type) {
     case "start":
       return start(clock, structure, now);
     case "pause":
@@ -108,7 +173,7 @@ function applyClockCommand(
     case "resume":
       return resume(clock, now);
     case "setRemaining":
-      return setRemaining(clock, structure, command.remainingMs, now);
+      return setRemaining(clock, structure, action.remainingMs, now);
   }
 }
 

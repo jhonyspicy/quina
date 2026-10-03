@@ -59,7 +59,8 @@ function CreateTournament({ onCreated }: { onCreated(id: string): void }) {
 }
 
 function Remote({ tournamentId }: { tournamentId: string }) {
-  const { status, snapshot, notFound, pairResult, serverClock, send } = useTournament(tournamentId);
+  const { status, snapshot, notFound, pairResult, remoteNumber, serverClock, send } =
+    useTournament(tournamentId);
   const now = useNow(serverClock.now);
   const online = status === "open";
 
@@ -77,7 +78,7 @@ function Remote({ tournamentId }: { tournamentId: string }) {
   return (
     <main className="screen">
       <header className="topbar">
-        <span>Quina リモコン</span>
+        <span>{remoteNumber === null ? "Quina リモコン" : `リモコン ${remoteNumber}`}</span>
         <span className={`badge ${online ? "ok" : "warn"}`}>
           {online ? "接続中" : "再接続しています…"}
         </span>

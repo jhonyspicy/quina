@@ -65,7 +65,7 @@ function Tournament({ tournamentId, onNotFound }: { tournamentId: string; onNotF
     const conn = connectTournament({
       apiOrigin: API_ORIGIN,
       tournamentId,
-      role: "signage",
+      deviceId: null,
       onStatus: setStatus,
       onNotFound,
       onMessage: (message: TournamentServerMessage) => {

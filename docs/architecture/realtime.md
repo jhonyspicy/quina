@@ -2,7 +2,7 @@
 
 1大会に対してリモコンとサイネージを接続し、時計の操作を同期する最小構成の現在の実装。技術構成の判断は[ADR 0004](../adr/0004-cloudflare-durable-objects-and-initial-stack.md)、要件は[大会単位のリモコン・サイネージ接続と進行操作](../../openspec/changes/tournament-remote-signage/spec.md)を参照する。時計の計算は[時計ロジック](clock.md)に記す。
 
-ログイン、店舗、ストラクチャー設定、QRによる接続、リモコンの識別番号、操作履歴、エントリー、同時実行数の制限、操作の重複計上の防止は未実装。
+ログイン、店舗、ストラクチャー設定、QRによる接続、操作履歴の表示、エントリー、同時実行数の制限は未実装。
 
 ## 構成
 
@@ -27,22 +27,46 @@ apps/signage (React + Vite) ─WebSocket──┘                      └─ Pa
 | パス | 内容 |
 | --- | --- |
 | `POST /dev/tournaments` | 開発用。ログインなしで、固定ストラクチャー（20分×10レベル、`src/sample-structure.ts`）の大会を準備し、`{ tournamentId }` を返す。環境変数 `ALLOW_DEV_ENDPOINTS` が `"true"` のときだけ有効。`wrangler.jsonc` の既定値は `"false"` で、`pnpm dev` の起動時だけ `true` にする |
-| `GET /tournaments/:tournamentId/ws?role=remote\|signage` | 大会のDurable ObjectへのWebSocket接続。`tournamentId` はUUID |
+| `GET /tournaments/:tournamentId/ws?role=signage` | サイネージとして大会のDurable ObjectへWebSocket接続する。`tournamentId` はUUID |
+| `GET /tournaments/:tournamentId/ws?role=remote&device=:deviceId` | リモコンとして接続する。`deviceId` は端末IDのUUID（小文字）で、ない・形式が違う場合は `400` |
 | `GET /pairing/ws` | 未接続サイネージのPIN待ち受け用WebSocket接続 |
 
 大会IDを知っていればリモコンとして接続できる。大会IDはUUIDで推測されにくいことに依存しており、QRの有効期間や失効などの接続管理は未実装。
 
 ## 大会の状態
 
-`TournamentDurableObject` は、大会ID・ストラクチャー・時計の状態（`ClockState`）を1つの値としてDurable Objectのストレージ（キー `tournament`）に保存する。操作を処理するたびに保存してから配信する。準備されていない大会への接続は、WebSocketを受け入れた直後にクローズコード `4404` で閉じる（ブラウザはHTTPのステータスを読めないため）。
+`TournamentDurableObject` は、Durable Objectのストレージ（SQLite）に次を保存する。
 
-WebSocketはHibernation API（`ctx.acceptWebSocket`）で受け入れ、接続時のタグで役割（`remote`／`signage`）を区別する。操作はタグが `remote` の接続からのものだけを受け付け、サイネージからのメッセージは無視する。
+| 保存先 | 内容 |
+| --- | --- |
+| KVのキー `tournament` | 大会ID・ストラクチャー・時計の状態（`ClockState`）を1つの値として保存する |
+| `remotes` テーブル | 端末ID（`device_id`）ごとのリモコン識別番号（`number`） |
+| `operations` テーブル | 受け付けた操作の操作ID（`op_id`）、端末ID、操作の内容（JSON）、受信時刻 |
+
+操作を処理するたびに、操作の記録と時計の状態を同期APIで書き込んでから配信する。両者の書き込みの間に `await` をはさまないため、まとめて保存される。準備されていない大会への接続は、WebSocketを受け入れた直後にクローズコード `4404` で閉じる（ブラウザはHTTPのステータスを読めないため）。
+
+WebSocketはHibernation API（`ctx.acceptWebSocket`）で受け入れ、役割（`remote`／`signage`）と、リモコンなら端末IDと識別番号を接続に添付する（`serializeAttachment`）。操作はリモコンの接続からのものだけを受け付け、サイネージからのメッセージは無視する。
+
+## リモコンの識別番号
+
+- リモコンはブラウザの `localStorage`（キー `quina.remote.deviceId`）に端末IDを保存し、接続時に送る。端末IDは無作為なUUIDで、人の本人確認には使わない。保存できない環境では読み込みのたびに新しい端末IDになる。端末IDに有効期限はない。
+- 大会のDurable Objectは、初めて接続した端末IDに、その大会で次の番号（1, 2, 3…）を割り当てて `remotes` テーブルに保存する。同じ端末IDの再接続・再読み込みには同じ番号を返す。番号は大会ごとに振るため、同じ端末でも大会が違えば番号は異なる。
+- 同じブラウザで複数のタブを開いた場合は、同じ端末IDとなり同じ番号になる。
+- 接続したリモコンには、状態の前に `welcome` で番号を送る。リモコンは画面上部に「リモコン 1」のように表示する。
+
+## 操作の重複防止
+
+- リモコンは操作ごとに新しい操作ID（UUID）を付けて送る。
+- 大会のDurable Objectは、操作を処理する前に `operations` テーブルへ操作IDを記録する。同じ操作IDがすでにあれば、その操作を処理せず配信もしない。別の操作IDで届いた操作は、内容が同じでも別の操作として処理する。
+- 処理しても状態が変わらない操作（開始済みの大会への開始など）も、操作IDとして記録する。
+- リモコンは、切断中の操作をためて再送することはしない。重複防止は、通信の再送などで同じ操作が二度届いた場合への備え。
+- 操作IDはブラウザの `crypto.getRandomValues` から作る（`packages/realtime/src/random-id.ts`）。LAN内のIPアドレスで開いた開発中の画面のようにHTTPSでない環境では `crypto.randomUUID` を使えないため。
 
 ## メッセージ
 
 すべてJSON文字列。型は `packages/protocol/src/messages.ts` にある。
 
-リモコン → 大会:
+リモコン → 大会（すべての操作に、操作ごとに一意な `opId` を付ける）:
 
 | `type` | 内容 |
 | --- | --- |
@@ -56,6 +80,7 @@ WebSocketはHibernation API（`ctx.acceptWebSocket`）で受け入れ、接続�
 | `type` | 内容 |
 | --- | --- |
 | `state` | 時計の状態・ストラクチャー・送信時のサーバー時刻（`serverNow`）。接続直後と、状態が変わるたびに全端末へ送る。状態が変わらない操作（開始済みへの開始など）では送らない |
+| `welcome` | 接続したリモコンにだけ、大会内での識別番号（`remoteNumber`）を送る |
 | `pairSignageResult` | `pairSignage` を送ったリモコンにだけ、接続できたか（`ok`）を返す |
 
 PIN → 未接続サイネージ: `pin`（表示するPIN）、`paired`（接続先の `tournamentId`）。

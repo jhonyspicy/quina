@@ -7,13 +7,19 @@ import type { ClockState, Structure } from "@quina/clock";
 /** 準備されていない大会に接続したとき、サーバーがWebSocketを閉じるコード */
 export const CLOSE_TOURNAMENT_NOT_FOUND = 4404;
 
-/** リモコンから大会のDurable Objectへ送る操作 */
-export type RemoteCommand =
+/** リモコンの操作の内容 */
+export type RemoteAction =
   | { type: "start" }
   | { type: "pause" }
   | { type: "resume" }
   | { type: "setRemaining"; remainingMs: number }
   | { type: "pairSignage"; pin: string };
+
+/**
+ * リモコンから大会のDurable Objectへ送る操作。
+ * `opId` は操作ごとに一意なID。同じ `opId` の操作が再び届いても一度しか処理しない。
+ */
+export type RemoteCommand = RemoteAction & { opId: string };
 
 /** 大会のDurable Objectからリモコン・サイネージへ送るメッセージ */
 export type TournamentServerMessage =
@@ -24,12 +30,21 @@ export type TournamentServerMessage =
       /** 送信時点のサーバー時刻（ミリ秒）。端末の時刻とのずれの推定に使う */
       serverNow: number;
     }
+  /** 接続したリモコンにだけ送る。大会内でのリモコンの識別番号 */
+  | { type: "welcome"; remoteNumber: number }
   | { type: "pairSignageResult"; pin: string; ok: boolean };
 
 /** PIN接続用のDurable Objectから未接続のサイネージへ送るメッセージ */
 export type PairingServerMessage =
   | { type: "pin"; pin: string }
   | { type: "paired"; tournamentId: string };
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** 操作ID・端末IDとして受け付ける形式（小文字のUUID）か */
+export function isId(value: unknown): value is string {
+  return typeof value === "string" && UUID.test(value);
+}
 
 /** 受信した文字列をリモコンの操作として解釈する。不正な内容なら `null` */
 export function parseRemoteCommand(raw: string): RemoteCommand | null {
@@ -39,22 +54,26 @@ export function parseRemoteCommand(raw: string): RemoteCommand | null {
   } catch {
     return null;
   }
-  if (typeof data !== "object" || data === null || !("type" in data)) return null;
+  if (typeof data !== "object" || data === null || !("type" in data) || !("opId" in data)) {
+    return null;
+  }
+  if (!isId(data.opId)) return null;
+  const opId = data.opId;
   switch (data.type) {
     case "start":
     case "pause":
     case "resume":
-      return { type: data.type };
+      return { type: data.type, opId };
     case "setRemaining":
       return "remainingMs" in data &&
         typeof data.remainingMs === "number" &&
         Number.isInteger(data.remainingMs) &&
         data.remainingMs >= 0
-        ? { type: "setRemaining", remainingMs: data.remainingMs }
+        ? { type: "setRemaining", remainingMs: data.remainingMs, opId }
         : null;
     case "pairSignage":
       return "pin" in data && typeof data.pin === "string" && /^\d{6}$/.test(data.pin)
-        ? { type: "pairSignage", pin: data.pin }
+        ? { type: "pairSignage", pin: data.pin, opId }
         : null;
     default:
       return null;

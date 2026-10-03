@@ -45,8 +45,26 @@ async function createTournament(): Promise<string> {
   return tournamentId;
 }
 
-const connectTournament = (id: string, role: "remote" | "signage") =>
-  openSocket<TournamentServerMessage>(`/tournaments/${id}/ws?role=${role}`);
+const connectSignage = (id: string) =>
+  openSocket<TournamentServerMessage>(`/tournaments/${id}/ws?role=signage`);
+
+/** リモコンとして接続し、最初に届く識別番号を受け取る */
+async function connectRemote(id: string, deviceId: string = crypto.randomUUID()) {
+  const socket = await openSocket<TournamentServerMessage>(
+    `/tournaments/${id}/ws?role=remote&device=${deviceId}`,
+  );
+  const welcome = await socket.next();
+  if (welcome.type !== "welcome") throw new Error(`expected welcome: ${welcome.type}`);
+  return {
+    ...socket,
+    remoteNumber: welcome.remoteNumber,
+    /** 新しい操作IDを付けて送り、その操作IDを返す */
+    command(action: Record<string, unknown>, opId: string = crypto.randomUUID()) {
+      socket.send({ ...action, opId });
+      return opId;
+    },
+  };
+}
 
 describe("開発用の大会作成", () => {
   it("ALLOW_DEV_ENDPOINTS が true でなければ使えない", async () => {
@@ -61,26 +79,26 @@ describe("開発用の大会作成", () => {
 describe("大会への接続と時計の操作", () => {
   it("接続すると待機中の状態を受け取り、リモコンの開始が全端末に配信される", async () => {
     const id = await createTournament();
-    const remote = await connectTournament(id, "remote");
-    const signage = await connectTournament(id, "signage");
+    const remote = await connectRemote(id);
+    const signage = await connectSignage(id);
 
     expect(await remote.next()).toMatchObject({ type: "state", clock: { status: "waiting" } });
     expect(await signage.next()).toMatchObject({ type: "state", clock: { status: "waiting" } });
 
-    remote.send({ type: "start" });
+    remote.command({ type: "start" });
     expect(await remote.next()).toMatchObject({ clock: { status: "running", levelIndex: 0 } });
     expect(await signage.next()).toMatchObject({ clock: { status: "running", levelIndex: 0 } });
   });
 
   it("開始済みの大会への開始は無視し、続く操作だけを配信する", async () => {
     const id = await createTournament();
-    const remote = await connectTournament(id, "remote");
+    const remote = await connectRemote(id);
     await remote.next();
 
-    remote.send({ type: "start" });
+    remote.command({ type: "start" });
     await remote.next();
-    remote.send({ type: "start" });
-    remote.send({ type: "setRemaining", remainingMs: 60_000 });
+    remote.command({ type: "start" });
+    remote.command({ type: "setRemaining", remainingMs: 60_000 });
     expect(await remote.next()).toMatchObject({
       clock: { status: "running", remainingMs: 60_000 },
     });
@@ -88,46 +106,46 @@ describe("大会への接続と時計の操作", () => {
 
   it("一時停止・再開・残り時間の変更を配信する", async () => {
     const id = await createTournament();
-    const remote = await connectTournament(id, "remote");
+    const remote = await connectRemote(id);
     await remote.next();
-    remote.send({ type: "start" });
+    remote.command({ type: "start" });
     await remote.next();
 
-    remote.send({ type: "pause" });
+    remote.command({ type: "pause" });
     expect(await remote.next()).toMatchObject({ clock: { status: "paused" } });
-    remote.send({ type: "setRemaining", remainingMs: 60_000 });
+    remote.command({ type: "setRemaining", remainingMs: 60_000 });
     expect(await remote.next()).toMatchObject({ clock: { status: "paused", remainingMs: 60_000 } });
-    remote.send({ type: "resume" });
+    remote.command({ type: "resume" });
     expect(await remote.next()).toMatchObject({ clock: { status: "running", remainingMs: 60_000 } });
   });
 
   it("サイネージからの操作は受け付けない", async () => {
     const id = await createTournament();
-    const remote = await connectTournament(id, "remote");
-    const signage = await connectTournament(id, "signage");
+    const remote = await connectRemote(id);
+    const signage = await connectSignage(id);
     await remote.next();
     await signage.next();
 
-    remote.send({ type: "start" });
+    remote.command({ type: "start" });
     await remote.next();
-    signage.send({ type: "pause" });
-    remote.send({ type: "setRemaining", remainingMs: 1000 });
+    signage.send({ type: "pause", opId: crypto.randomUUID() });
+    remote.command({ type: "setRemaining", remainingMs: 1000 });
     expect(await remote.next()).toMatchObject({ clock: { status: "running", remainingMs: 1000 } });
   });
 
   it("再接続すると最新の状態を受け取る", async () => {
     const id = await createTournament();
-    const remote = await connectTournament(id, "remote");
+    const remote = await connectRemote(id);
     await remote.next();
-    remote.send({ type: "start" });
+    remote.command({ type: "start" });
     await remote.next();
 
-    const signage = await connectTournament(id, "signage");
+    const signage = await connectSignage(id);
     expect(await signage.next()).toMatchObject({ clock: { status: "running" } });
   });
 
   it("準備されていない大会への接続はクローズコード4404で切断する", async () => {
-    const socket = await connectTournament(crypto.randomUUID(), "signage");
+    const socket = await connectSignage(crypto.randomUUID());
     expect((await socket.closed).code).toBe(4404);
   });
 });
@@ -135,7 +153,7 @@ describe("大会への接続と時計の操作", () => {
 describe("PINによるサイネージの接続", () => {
   it("リモコンが入力したPINのサイネージに大会を伝え、使用済みのPINは無効にする", async () => {
     const id = await createTournament();
-    const remote = await connectTournament(id, "remote");
+    const remote = await connectRemote(id);
     await remote.next();
 
     const signage = await openSocket<PairingServerMessage>("/pairing/ws");
@@ -143,11 +161,81 @@ describe("PINによるサイネージの接続", () => {
     if (pinMessage.type !== "pin") throw new Error("expected pin");
     expect(pinMessage.pin).toMatch(/^\d{6}$/);
 
-    remote.send({ type: "pairSignage", pin: pinMessage.pin });
+    remote.command({ type: "pairSignage", pin: pinMessage.pin });
     expect(await signage.next()).toEqual({ type: "paired", tournamentId: id });
     expect(await remote.next()).toEqual({ type: "pairSignageResult", pin: pinMessage.pin, ok: true });
 
-    remote.send({ type: "pairSignage", pin: pinMessage.pin });
+    remote.command({ type: "pairSignage", pin: pinMessage.pin });
     expect(await remote.next()).toEqual({ type: "pairSignageResult", pin: pinMessage.pin, ok: false });
+  });
+});
+
+describe("リモコンの識別番号", () => {
+  it("大会内で接続順に番号を割り当て、同じ端末には同じ番号を返す", async () => {
+    const id = await createTournament();
+    const deviceA = crypto.randomUUID();
+    const deviceB = crypto.randomUUID();
+
+    const a = await connectRemote(id, deviceA);
+    const b = await connectRemote(id, deviceB);
+    expect([a.remoteNumber, b.remoteNumber]).toEqual([1, 2]);
+
+    a.ws.close();
+    const reconnected = await connectRemote(id, deviceA);
+    expect(reconnected.remoteNumber).toBe(1);
+  });
+
+  it("別の大会では番号を振り直す", async () => {
+    const device = crypto.randomUUID();
+    const first = await createTournament();
+    await connectRemote(first);
+    expect((await connectRemote(first, device)).remoteNumber).toBe(2);
+
+    expect((await connectRemote(await createTournament(), device)).remoteNumber).toBe(1);
+  });
+
+  it("端末IDのないリモコン接続は受け付けない", async () => {
+    const id = await createTournament();
+    const response = await SELF.fetch(`${ORIGIN}/tournaments/${id}/ws?role=remote`, {
+      headers: { Upgrade: "websocket" },
+    });
+    expect(response.status).toBe(400);
+  });
+});
+
+describe("操作の重複防止", () => {
+  it("同じ操作IDの操作が再び届いても一度しか処理しない", async () => {
+    const id = await createTournament();
+    const remote = await connectRemote(id);
+    await remote.next();
+
+    remote.command({ type: "start" });
+    await remote.next();
+    const pauseOp = remote.command({ type: "pause" });
+    expect(await remote.next()).toMatchObject({ clock: { status: "paused" } });
+    remote.command({ type: "resume" });
+    expect(await remote.next()).toMatchObject({ clock: { status: "running" } });
+
+    // 一時停止の再送は無視され、続く操作だけが配信される
+    remote.command({ type: "pause" }, pauseOp);
+    remote.command({ type: "setRemaining", remainingMs: 1000 });
+    expect(await remote.next()).toMatchObject({ clock: { status: "running", remainingMs: 1000 } });
+  });
+
+  it("別の端末から同じ内容の操作が届いた場合は、それぞれ処理する", async () => {
+    const id = await createTournament();
+    const a = await connectRemote(id);
+    const b = await connectRemote(id);
+    await a.next();
+    await b.next();
+
+    a.command({ type: "start" });
+    await a.next();
+    await b.next();
+    a.command({ type: "pause" });
+    await a.next();
+    await b.next();
+    b.command({ type: "resume" });
+    expect(await a.next()).toMatchObject({ clock: { status: "running" } });
   });
 });

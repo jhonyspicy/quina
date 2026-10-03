@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { ClockState, Structure } from "@quina/clock";
-import type { RemoteCommand, TournamentServerMessage } from "@quina/protocol";
+import type { RemoteAction, TournamentServerMessage } from "@quina/protocol";
 import {
   connectTournament,
   createServerClock,
+  randomId,
   type Connection,
   type ConnectionStatus,
 } from "@quina/realtime";
 import { API_ORIGIN } from "./api.ts";
+import { loadDeviceId } from "./device.ts";
 
 export type PairResult = { pin: string; ok: boolean };
 
@@ -16,6 +18,8 @@ export function useTournament(tournamentId: string) {
   const [snapshot, setSnapshot] = useState<{ clock: ClockState; structure: Structure } | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [pairResult, setPairResult] = useState<PairResult | null>(null);
+  const [remoteNumber, setRemoteNumber] = useState<number | null>(null);
+  const [deviceId] = useState(loadDeviceId);
   const [serverClock] = useState(createServerClock);
   const connection = useRef<Connection | null>(null);
 
@@ -23,13 +27,15 @@ export function useTournament(tournamentId: string) {
     const conn = connectTournament({
       apiOrigin: API_ORIGIN,
       tournamentId,
-      role: "remote",
+      deviceId,
       onStatus: setStatus,
       onNotFound: () => setNotFound(true),
       onMessage: (message: TournamentServerMessage) => {
         if (message.type === "state") {
           serverClock.sync(message.serverNow);
           setSnapshot({ clock: message.clock, structure: message.structure });
+        } else if (message.type === "welcome") {
+          setRemoteNumber(message.remoteNumber);
         } else {
           setPairResult({ pin: message.pin, ok: message.ok });
         }
@@ -37,9 +43,11 @@ export function useTournament(tournamentId: string) {
     });
     connection.current = conn;
     return () => conn.close();
-  }, [tournamentId, serverClock]);
+  }, [tournamentId, deviceId, serverClock]);
 
-  const send = (command: RemoteCommand) => connection.current?.send(command) ?? false;
+  /** 操作IDを付けて送る。切断中は送らずに `false` を返す */
+  const send = (action: RemoteAction) =>
+    connection.current?.send({ ...action, opId: randomId() }) ?? false;
 
-  return { status, snapshot, notFound, pairResult, serverClock, send };
+  return { status, snapshot, notFound, pairResult, remoteNumber, serverClock, send };
 }
