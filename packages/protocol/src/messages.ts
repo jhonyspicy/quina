@@ -13,7 +13,9 @@ export type RemoteAction =
   | { type: "pause" }
   | { type: "resume" }
   | { type: "setRemaining"; remainingMs: number }
-  | { type: "pairSignage"; pin: string };
+  | { type: "pairSignage"; pin: string }
+  | { type: "addEntry" }
+  | { type: "cancelEntry"; entryId: number };
 
 /**
  * リモコンから大会のDurable Objectへ送る操作。
@@ -21,17 +23,32 @@ export type RemoteAction =
  */
 export type RemoteCommand = RemoteAction & { opId: string };
 
+/** エントリー1件。リモコンは識別番号で表す */
+export type Entry = {
+  /** 大会内で追加順に1から振る番号 */
+  id: number;
+  addedAt: number;
+  addedBy: number;
+  /** 取り消されていなければ `null` */
+  cancelledAt: number | null;
+  cancelledBy: number | null;
+};
+
 /** 大会のDurable Objectからリモコン・サイネージへ送るメッセージ */
 export type TournamentServerMessage =
   | {
       type: "state";
       clock: ClockState;
       structure: Structure;
+      /** 取り消されていないエントリーの数 */
+      entryCount: number;
       /** 送信時点のサーバー時刻（ミリ秒）。端末の時刻とのずれの推定に使う */
       serverNow: number;
     }
   /** 接続したリモコンにだけ送る。大会内でのリモコンの識別番号 */
   | { type: "welcome"; remoteNumber: number }
+  /** リモコンにだけ送る。エントリーの一覧（取り消し済みを含む、追加順） */
+  | { type: "entries"; entries: Entry[] }
   | { type: "pairSignageResult"; pin: string; ok: boolean };
 
 /** PIN接続用のDurable Objectから未接続のサイネージへ送るメッセージ */
@@ -74,6 +91,15 @@ export function parseRemoteCommand(raw: string): RemoteCommand | null {
     case "pairSignage":
       return "pin" in data && typeof data.pin === "string" && /^\d{6}$/.test(data.pin)
         ? { type: "pairSignage", pin: data.pin, opId }
+        : null;
+    case "addEntry":
+      return { type: "addEntry", opId };
+    case "cancelEntry":
+      return "entryId" in data &&
+        typeof data.entryId === "number" &&
+        Number.isInteger(data.entryId) &&
+        data.entryId > 0
+        ? { type: "cancelEntry", entryId: data.entryId, opId }
         : null;
     default:
       return null;

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ClockState, Structure } from "@quina/clock";
-import type { RemoteAction, TournamentServerMessage } from "@quina/protocol";
+import type { Entry, RemoteAction, TournamentServerMessage } from "@quina/protocol";
 import {
   connectTournament,
   createServerClock,
@@ -15,7 +15,12 @@ export type PairResult = { pin: string; ok: boolean };
 
 export function useTournament(tournamentId: string) {
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
-  const [snapshot, setSnapshot] = useState<{ clock: ClockState; structure: Structure } | null>(null);
+  const [snapshot, setSnapshot] = useState<{
+    clock: ClockState;
+    structure: Structure;
+    entryCount: number;
+  } | null>(null);
+  const [entries, setEntries] = useState<Entry[]>([]);
   const [notFound, setNotFound] = useState(false);
   const [pairResult, setPairResult] = useState<PairResult | null>(null);
   const [remoteNumber, setRemoteNumber] = useState<number | null>(null);
@@ -33,7 +38,13 @@ export function useTournament(tournamentId: string) {
       onMessage: (message: TournamentServerMessage) => {
         if (message.type === "state") {
           serverClock.sync(message.serverNow);
-          setSnapshot({ clock: message.clock, structure: message.structure });
+          setSnapshot({
+            clock: message.clock,
+            structure: message.structure,
+            entryCount: message.entryCount,
+          });
+        } else if (message.type === "entries") {
+          setEntries(message.entries);
         } else if (message.type === "welcome") {
           setRemoteNumber(message.remoteNumber);
         } else {
@@ -49,5 +60,5 @@ export function useTournament(tournamentId: string) {
   const send = (action: RemoteAction) =>
     connection.current?.send({ ...action, opId: randomId() }) ?? false;
 
-  return { status, snapshot, notFound, pairResult, remoteNumber, serverClock, send };
+  return { status, snapshot, entries, notFound, pairResult, remoteNumber, serverClock, send };
 }

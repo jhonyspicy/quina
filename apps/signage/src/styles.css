@@ -55,3 +55,18 @@ body {
   color: #f87171;
   font-size: 2vw;
 }
+
+.waiting-entries { font-size: 4vw; margin: 0 0 3vh; color: #9aa1ad; }
+.waiting-entries span { font-size: 8vw; font-weight: 700; color: #f2f3f5; font-variant-numeric: tabular-nums; }
+
+.entries {
+  position: absolute;
+  bottom: 4vh;
+  left: 0;
+  right: 0;
+  margin: 0;
+  font-size: 3vw;
+  color: #9aa1ad;
+  letter-spacing: 0.1em;
+  font-variant-numeric: tabular-nums;
+}

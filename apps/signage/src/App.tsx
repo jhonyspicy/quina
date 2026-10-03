@@ -57,7 +57,11 @@ function Pairing({ onPaired }: { onPaired(tournamentId: string): void }) {
 
 function Tournament({ tournamentId, onNotFound }: { tournamentId: string; onNotFound(): void }) {
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
-  const [snapshot, setSnapshot] = useState<{ clock: ClockState; structure: Structure } | null>(null);
+  const [snapshot, setSnapshot] = useState<{
+    clock: ClockState;
+    structure: Structure;
+    entryCount: number;
+  } | null>(null);
   const [serverClock] = useState(createServerClock);
   const now = useNow(serverClock.now);
 
@@ -71,7 +75,11 @@ function Tournament({ tournamentId, onNotFound }: { tournamentId: string; onNotF
       onMessage: (message: TournamentServerMessage) => {
         if (message.type !== "state") return;
         serverClock.sync(message.serverNow);
-        setSnapshot({ clock: message.clock, structure: message.structure });
+        setSnapshot({
+          clock: message.clock,
+          structure: message.structure,
+          entryCount: message.entryCount,
+        });
       },
     });
     return () => conn.close();
@@ -87,11 +95,15 @@ function Tournament({ tournamentId, onNotFound }: { tournamentId: string; onNotF
       {!view ? null : view.status === "waiting" ? (
         <div className="waiting">
           <p className="waiting-title">まもなく開始</p>
+          <p className="waiting-entries">
+            エントリー <span>{snapshot.entryCount}</span>
+          </p>
           <p className="waiting-note">スタッフの開始操作をお待ちください</p>
         </div>
       ) : (
         <div className="timer">
           <p className="level">LEVEL {view.levelIndex! + 1}</p>
+          <p className="entries">ENTRIES {snapshot.entryCount}</p>
           <p className={`time${view.status === "paused" ? " paused" : ""}`}>
             {formatRemaining(view.remainingMs!)}
           </p>

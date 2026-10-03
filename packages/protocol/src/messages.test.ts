@@ -18,6 +18,12 @@ describe("parseRemoteCommand", () => {
       pin: "012345",
       opId: OP,
     });
+    expect(parseRemoteCommand(cmd({ type: "addEntry" }))).toEqual({ type: "addEntry", opId: OP });
+    expect(parseRemoteCommand(cmd({ type: "cancelEntry", entryId: 3 }))).toEqual({
+      type: "cancelEntry",
+      entryId: 3,
+      opId: OP,
+    });
   });
 
   it("不正な内容は null を返す", () => {
@@ -28,6 +34,9 @@ describe("parseRemoteCommand", () => {
     expect(parseRemoteCommand(cmd({ type: "setRemaining", remainingMs: "60000" }))).toBeNull();
     expect(parseRemoteCommand(cmd({ type: "pairSignage", pin: "12345" }))).toBeNull();
     expect(parseRemoteCommand(cmd({ type: "pairSignage", pin: "abcdef" }))).toBeNull();
+    expect(parseRemoteCommand(cmd({ type: "cancelEntry" }))).toBeNull();
+    expect(parseRemoteCommand(cmd({ type: "cancelEntry", entryId: 0 }))).toBeNull();
+    expect(parseRemoteCommand(cmd({ type: "cancelEntry", entryId: 1.5 }))).toBeNull();
   });
 
   it("操作IDがない・形式が違う操作は null を返す", () => {

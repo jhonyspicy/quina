@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import type { Entry } from "@quina/protocol";
 import { formatRemaining, getClockView } from "@quina/clock";
 import { createDevTournament } from "./api.ts";
 import { SlideToStart } from "./SlideToStart.tsx";
@@ -59,7 +60,7 @@ function CreateTournament({ onCreated }: { onCreated(id: string): void }) {
 }
 
 function Remote({ tournamentId }: { tournamentId: string }) {
-  const { status, snapshot, notFound, pairResult, remoteNumber, serverClock, send } =
+  const { status, snapshot, entries, notFound, pairResult, remoteNumber, serverClock, send } =
     useTournament(tournamentId);
   const now = useNow(serverClock.now);
   const online = status === "open";
@@ -118,6 +119,16 @@ function Remote({ tournamentId }: { tournamentId: string }) {
         </section>
       )}
 
+      {snapshot && (
+        <Entries
+          count={snapshot.entryCount}
+          entries={entries}
+          disabled={!online}
+          onAdd={() => send({ type: "addEntry" })}
+          onCancel={(entryId) => send({ type: "cancelEntry", entryId })}
+        />
+      )}
+
       {view && view.status !== "waiting" && (
         <RemainingForm
           disabled={!online}
@@ -132,6 +143,68 @@ function Remote({ tournamentId }: { tournamentId: string }) {
       />
     </main>
   );
+}
+
+function Entries({
+  count,
+  entries,
+  disabled,
+  onAdd,
+  onCancel,
+}: {
+  count: number;
+  entries: Entry[];
+  disabled: boolean;
+  onAdd(): void;
+  onCancel(entryId: number): void;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const newestFirst = [...entries].reverse();
+  const visible = showAll ? newestFirst : newestFirst.slice(0, 5);
+
+  const cancel = (entry: Entry) => {
+    if (confirm(`エントリー #${entry.id} を取り消しますか？`)) onCancel(entry.id);
+  };
+
+  return (
+    <section className="card">
+      <div className="entry-header">
+        <h2>エントリー</h2>
+        <span className="entry-count">{count}</span>
+      </div>
+      <button className="primary" disabled={disabled} onClick={onAdd}>
+        ＋ エントリーを追加
+      </button>
+      {visible.length > 0 && (
+        <ul className="entry-list">
+          {visible.map((entry) => (
+            <li key={entry.id} className={entry.cancelledAt === null ? "" : "cancelled"}>
+              <span className="entry-id">#{entry.id}</span>
+              <span className="entry-meta">
+                {formatTime(entry.addedAt)} リモコン{entry.addedBy}
+                {entry.cancelledAt !== null &&
+                  ` ・ ${formatTime(entry.cancelledAt)} リモコン${entry.cancelledBy}が取消`}
+              </span>
+              {entry.cancelledAt === null && (
+                <button className="small" disabled={disabled} onClick={() => cancel(entry)}>
+                  取消
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {entries.length > 5 && (
+        <button className="link" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "新しい5件だけ表示" : `すべて表示（${entries.length}件）`}
+        </button>
+      )}
+    </section>
+  );
+}
+
+function formatTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
 }
 
 function RemainingForm({ disabled, onSubmit }: { disabled: boolean; onSubmit(ms: number): void }) {

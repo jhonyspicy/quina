@@ -6,33 +6,39 @@ import worker from "../src/index.ts";
 
 const ORIGIN = "https://api.example.com";
 
-type Socket<T> = {
+type Message = { type: string };
+
+type Socket<T extends Message> = {
   ws: WebSocket;
-  next(): Promise<T>;
+  /** 指定した種類の次のメッセージを待つ。他の種類のメッセージはそれぞれの順番で保持する */
+  next<K extends T["type"]>(type: K): Promise<Extract<T, { type: K }>>;
   closed: Promise<CloseEvent>;
   send(message: unknown): void;
 };
 
-async function openSocket<T>(path: string): Promise<Socket<T>> {
+async function openSocket<T extends Message>(path: string): Promise<Socket<T>> {
   const response = await SELF.fetch(`${ORIGIN}${path}`, { headers: { Upgrade: "websocket" } });
   const ws = response.webSocket;
   if (!ws) throw new Error(`expected websocket: ${response.status}`);
-  const queue: T[] = [];
-  const waiters: ((message: T) => void)[] = [];
+  const queues = new Map<string, T[]>();
+  const waiters = new Map<string, ((message: T) => void)[]>();
   ws.addEventListener("message", (event) => {
     const message = JSON.parse(event.data as string) as T;
-    const waiter = waiters.shift();
+    const waiter = waiters.get(message.type)?.shift();
     if (waiter) waiter(message);
-    else queue.push(message);
+    else queues.set(message.type, [...(queues.get(message.type) ?? []), message]);
   });
   const closed = new Promise<CloseEvent>((resolve) => ws.addEventListener("close", resolve));
   ws.accept();
   return {
     ws,
     closed,
-    next: () => {
-      const queued = queue.shift();
-      return queued ? Promise.resolve(queued) : new Promise((resolve) => waiters.push(resolve));
+    next: (type) => {
+      const queued = queues.get(type)?.shift();
+      if (queued) return Promise.resolve(queued as never);
+      return new Promise((resolve) =>
+        waiters.set(type, [...(waiters.get(type) ?? []), resolve as (message: T) => void]),
+      );
     },
     send: (message) => ws.send(JSON.stringify(message)),
   };
@@ -53,8 +59,7 @@ async function connectRemote(id: string, deviceId: string = crypto.randomUUID())
   const socket = await openSocket<TournamentServerMessage>(
     `/tournaments/${id}/ws?role=remote&device=${deviceId}`,
   );
-  const welcome = await socket.next();
-  if (welcome.type !== "welcome") throw new Error(`expected welcome: ${welcome.type}`);
+  const welcome = await socket.next("welcome");
   return {
     ...socket,
     remoteNumber: welcome.remoteNumber,
@@ -82,24 +87,24 @@ describe("大会への接続と時計の操作", () => {
     const remote = await connectRemote(id);
     const signage = await connectSignage(id);
 
-    expect(await remote.next()).toMatchObject({ type: "state", clock: { status: "waiting" } });
-    expect(await signage.next()).toMatchObject({ type: "state", clock: { status: "waiting" } });
+    expect(await remote.next("state")).toMatchObject({ type: "state", clock: { status: "waiting" } });
+    expect(await signage.next("state")).toMatchObject({ type: "state", clock: { status: "waiting" } });
 
     remote.command({ type: "start" });
-    expect(await remote.next()).toMatchObject({ clock: { status: "running", levelIndex: 0 } });
-    expect(await signage.next()).toMatchObject({ clock: { status: "running", levelIndex: 0 } });
+    expect(await remote.next("state")).toMatchObject({ clock: { status: "running", levelIndex: 0 } });
+    expect(await signage.next("state")).toMatchObject({ clock: { status: "running", levelIndex: 0 } });
   });
 
   it("開始済みの大会への開始は無視し、続く操作だけを配信する", async () => {
     const id = await createTournament();
     const remote = await connectRemote(id);
-    await remote.next();
+    await remote.next("state");
 
     remote.command({ type: "start" });
-    await remote.next();
+    await remote.next("state");
     remote.command({ type: "start" });
     remote.command({ type: "setRemaining", remainingMs: 60_000 });
-    expect(await remote.next()).toMatchObject({
+    expect(await remote.next("state")).toMatchObject({
       clock: { status: "running", remainingMs: 60_000 },
     });
   });
@@ -107,41 +112,41 @@ describe("大会への接続と時計の操作", () => {
   it("一時停止・再開・残り時間の変更を配信する", async () => {
     const id = await createTournament();
     const remote = await connectRemote(id);
-    await remote.next();
+    await remote.next("state");
     remote.command({ type: "start" });
-    await remote.next();
+    await remote.next("state");
 
     remote.command({ type: "pause" });
-    expect(await remote.next()).toMatchObject({ clock: { status: "paused" } });
+    expect(await remote.next("state")).toMatchObject({ clock: { status: "paused" } });
     remote.command({ type: "setRemaining", remainingMs: 60_000 });
-    expect(await remote.next()).toMatchObject({ clock: { status: "paused", remainingMs: 60_000 } });
+    expect(await remote.next("state")).toMatchObject({ clock: { status: "paused", remainingMs: 60_000 } });
     remote.command({ type: "resume" });
-    expect(await remote.next()).toMatchObject({ clock: { status: "running", remainingMs: 60_000 } });
+    expect(await remote.next("state")).toMatchObject({ clock: { status: "running", remainingMs: 60_000 } });
   });
 
   it("サイネージからの操作は受け付けない", async () => {
     const id = await createTournament();
     const remote = await connectRemote(id);
     const signage = await connectSignage(id);
-    await remote.next();
-    await signage.next();
+    await remote.next("state");
+    await signage.next("state");
 
     remote.command({ type: "start" });
-    await remote.next();
+    await remote.next("state");
     signage.send({ type: "pause", opId: crypto.randomUUID() });
     remote.command({ type: "setRemaining", remainingMs: 1000 });
-    expect(await remote.next()).toMatchObject({ clock: { status: "running", remainingMs: 1000 } });
+    expect(await remote.next("state")).toMatchObject({ clock: { status: "running", remainingMs: 1000 } });
   });
 
   it("再接続すると最新の状態を受け取る", async () => {
     const id = await createTournament();
     const remote = await connectRemote(id);
-    await remote.next();
+    await remote.next("state");
     remote.command({ type: "start" });
-    await remote.next();
+    await remote.next("state");
 
     const signage = await connectSignage(id);
-    expect(await signage.next()).toMatchObject({ clock: { status: "running" } });
+    expect(await signage.next("state")).toMatchObject({ clock: { status: "running" } });
   });
 
   it("準備されていない大会への接続はクローズコード4404で切断する", async () => {
@@ -154,19 +159,18 @@ describe("PINによるサイネージの接続", () => {
   it("リモコンが入力したPINのサイネージに大会を伝え、使用済みのPINは無効にする", async () => {
     const id = await createTournament();
     const remote = await connectRemote(id);
-    await remote.next();
+    await remote.next("state");
 
     const signage = await openSocket<PairingServerMessage>("/pairing/ws");
-    const pinMessage = await signage.next();
-    if (pinMessage.type !== "pin") throw new Error("expected pin");
-    expect(pinMessage.pin).toMatch(/^\d{6}$/);
+    const { pin } = await signage.next("pin");
+    expect(pin).toMatch(/^\d{6}$/);
 
-    remote.command({ type: "pairSignage", pin: pinMessage.pin });
-    expect(await signage.next()).toEqual({ type: "paired", tournamentId: id });
-    expect(await remote.next()).toEqual({ type: "pairSignageResult", pin: pinMessage.pin, ok: true });
+    remote.command({ type: "pairSignage", pin });
+    expect(await signage.next("paired")).toEqual({ type: "paired", tournamentId: id });
+    expect(await remote.next("pairSignageResult")).toEqual({ type: "pairSignageResult", pin, ok: true });
 
-    remote.command({ type: "pairSignage", pin: pinMessage.pin });
-    expect(await remote.next()).toEqual({ type: "pairSignageResult", pin: pinMessage.pin, ok: false });
+    remote.command({ type: "pairSignage", pin });
+    expect(await remote.next("pairSignageResult")).toEqual({ type: "pairSignageResult", pin, ok: false });
   });
 });
 
@@ -207,35 +211,138 @@ describe("操作の重複防止", () => {
   it("同じ操作IDの操作が再び届いても一度しか処理しない", async () => {
     const id = await createTournament();
     const remote = await connectRemote(id);
-    await remote.next();
+    await remote.next("state");
 
     remote.command({ type: "start" });
-    await remote.next();
+    await remote.next("state");
     const pauseOp = remote.command({ type: "pause" });
-    expect(await remote.next()).toMatchObject({ clock: { status: "paused" } });
+    expect(await remote.next("state")).toMatchObject({ clock: { status: "paused" } });
     remote.command({ type: "resume" });
-    expect(await remote.next()).toMatchObject({ clock: { status: "running" } });
+    expect(await remote.next("state")).toMatchObject({ clock: { status: "running" } });
 
     // 一時停止の再送は無視され、続く操作だけが配信される
     remote.command({ type: "pause" }, pauseOp);
     remote.command({ type: "setRemaining", remainingMs: 1000 });
-    expect(await remote.next()).toMatchObject({ clock: { status: "running", remainingMs: 1000 } });
+    expect(await remote.next("state")).toMatchObject({ clock: { status: "running", remainingMs: 1000 } });
   });
 
   it("別の端末から同じ内容の操作が届いた場合は、それぞれ処理する", async () => {
     const id = await createTournament();
     const a = await connectRemote(id);
     const b = await connectRemote(id);
-    await a.next();
-    await b.next();
+    await a.next("state");
+    await b.next("state");
 
     a.command({ type: "start" });
-    await a.next();
-    await b.next();
+    await a.next("state");
+    await b.next("state");
     a.command({ type: "pause" });
-    await a.next();
-    await b.next();
+    await a.next("state");
+    await b.next("state");
     b.command({ type: "resume" });
-    expect(await a.next()).toMatchObject({ clock: { status: "running" } });
+    expect(await a.next("state")).toMatchObject({ clock: { status: "running" } });
+  });
+});
+
+describe("エントリー", () => {
+  it("リモコンが追加したエントリーの数を、サイネージを含む全端末へ配信する", async () => {
+    const id = await createTournament();
+    const a = await connectRemote(id);
+    const b = await connectRemote(id);
+    const signage = await connectSignage(id);
+    expect(await signage.next("state")).toMatchObject({ entryCount: 0 });
+    await a.next("state");
+    await b.next("state");
+
+    a.command({ type: "addEntry" });
+    expect(await signage.next("state")).toMatchObject({ entryCount: 1, clock: { status: "waiting" } });
+    b.command({ type: "addEntry" });
+    expect(await signage.next("state")).toMatchObject({ entryCount: 2 });
+  });
+
+  it("リモコンにだけ、追加したリモコンの番号を含む一覧を送る", async () => {
+    const id = await createTournament();
+    const a = await connectRemote(id);
+    const b = await connectRemote(id);
+    expect(await a.next("entries")).toEqual({ type: "entries", entries: [] });
+    await b.next("entries");
+
+    b.command({ type: "addEntry" });
+    const { entries } = await a.next("entries");
+    expect(entries).toEqual([
+      { id: 1, addedAt: expect.any(Number), addedBy: 2, cancelledAt: null, cancelledBy: null },
+    ]);
+  });
+
+  it("同じ操作IDの追加は一件だけ計上する", async () => {
+    const id = await createTournament();
+    const remote = await connectRemote(id);
+    await remote.next("state");
+
+    const opId = remote.command({ type: "addEntry" });
+    expect(await remote.next("state")).toMatchObject({ entryCount: 1 });
+    remote.command({ type: "addEntry" }, opId);
+    remote.command({ type: "addEntry" });
+    expect(await remote.next("state")).toMatchObject({ entryCount: 2 });
+  });
+
+  it("開始後もエントリーを追加できる", async () => {
+    const id = await createTournament();
+    const remote = await connectRemote(id);
+    await remote.next("state");
+    remote.command({ type: "start" });
+    await remote.next("state");
+
+    remote.command({ type: "addEntry" });
+    expect(await remote.next("state")).toMatchObject({ entryCount: 1, clock: { status: "running" } });
+  });
+
+  it("別のリモコンが追加したエントリーを取り消せ、追加と取り消しの両方のリモコンを残す", async () => {
+    const id = await createTournament();
+    const a = await connectRemote(id);
+    const b = await connectRemote(id);
+    await a.next("entries");
+    await b.next("entries");
+
+    a.command({ type: "addEntry" });
+    await b.next("entries");
+    b.command({ type: "cancelEntry", entryId: 1 });
+
+    expect(await a.next("state")).toMatchObject({ entryCount: 0 });
+    expect(await a.next("state")).toMatchObject({ entryCount: 1 });
+    expect(await a.next("state")).toMatchObject({ entryCount: 0 });
+    await a.next("entries");
+    const { entries } = await a.next("entries");
+    expect(entries).toEqual([
+      { id: 1, addedAt: expect.any(Number), addedBy: 1, cancelledAt: expect.any(Number), cancelledBy: 2 },
+    ]);
+  });
+
+  it("取り消し済み・存在しないエントリーの取り消しは無視する", async () => {
+    const id = await createTournament();
+    const remote = await connectRemote(id);
+    await remote.next("state");
+    remote.command({ type: "addEntry" });
+    remote.command({ type: "addEntry" });
+    await remote.next("state");
+    await remote.next("state");
+
+    remote.command({ type: "cancelEntry", entryId: 1 });
+    expect(await remote.next("state")).toMatchObject({ entryCount: 1 });
+    remote.command({ type: "cancelEntry", entryId: 1 });
+    remote.command({ type: "cancelEntry", entryId: 99 });
+    remote.command({ type: "cancelEntry", entryId: 2 });
+    expect(await remote.next("state")).toMatchObject({ entryCount: 0 });
+  });
+
+  it("再接続したサイネージは現在のエントリー数を受け取る", async () => {
+    const id = await createTournament();
+    const remote = await connectRemote(id);
+    await remote.next("state");
+    remote.command({ type: "addEntry" });
+    await remote.next("state");
+
+    const signage = await connectSignage(id);
+    expect(await signage.next("state")).toMatchObject({ entryCount: 1 });
   });
 });

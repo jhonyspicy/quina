@@ -1,5 +1,6 @@
 export {
   CLOSE_TOURNAMENT_NOT_FOUND,
+  type Entry,
   isId,
   parseRemoteCommand,
   type PairingServerMessage,

@@ -11,6 +11,7 @@ import {
 import {
   CLOSE_TOURNAMENT_NOT_FOUND,
   isId,
+  type Entry,
   parseRemoteCommand,
   type RemoteAction,
   type RemoteCommand,
@@ -37,6 +38,7 @@ const STORAGE_KEY = "tournament";
  * - KVの `tournament`: 大会ID・ストラクチャー・時計の状態
  * - `remotes` テーブル: 端末IDごとのリモコン識別番号
  * - `operations` テーブル: 受け付けた操作。同じ操作IDを二度処理しないために使う
+ * - `entries` テーブル: エントリー。取り消しても行は残し、取り消した端末と時刻を記録する
  */
 export class TournamentDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -52,6 +54,13 @@ export class TournamentDurableObject extends DurableObject<Env> {
           device_id TEXT NOT NULL,
           action TEXT NOT NULL,
           received_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS entries (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          added_at INTEGER NOT NULL,
+          added_by TEXT NOT NULL,
+          cancelled_at INTEGER,
+          cancelled_by TEXT
         );
       `);
     });
@@ -84,10 +93,12 @@ export class TournamentDurableObject extends DurableObject<Env> {
       const remoteNumber = this.remoteNumberFor(deviceId!);
       server.serializeAttachment({ role, deviceId: deviceId!, remoteNumber } satisfies Attachment);
       send(server, { type: "welcome", remoteNumber });
+      send(server, this.stateMessage(tournament));
+      send(server, this.entriesMessage());
     } else {
       server.serializeAttachment({ role } satisfies Attachment);
+      send(server, this.stateMessage(tournament));
     }
-    send(server, stateMessage(tournament));
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -107,11 +118,22 @@ export class TournamentDurableObject extends DurableObject<Env> {
       return;
     }
 
+    if (command.type === "addEntry" || command.type === "cancelEntry") {
+      const changed =
+        command.type === "addEntry"
+          ? this.addEntry(attachment.deviceId)
+          : this.cancelEntry(command.entryId, attachment.deviceId);
+      if (!changed) return;
+      this.broadcast(this.stateMessage(tournament));
+      this.broadcast(this.entriesMessage(), "remote");
+      return;
+    }
+
     const clock = applyClockAction(tournament, command, Date.now());
     if (clock === tournament.clock) return;
     const next = { ...tournament, clock };
     this.ctx.storage.kv.put<Tournament>(STORAGE_KEY, next);
-    this.broadcast(stateMessage(next));
+    this.broadcast(this.stateMessage(next));
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
@@ -149,8 +171,53 @@ export class TournamentDurableObject extends DurableObject<Env> {
     return inserted.rowsWritten > 0;
   }
 
-  private broadcast(message: TournamentServerMessage): void {
-    for (const ws of this.ctx.getWebSockets()) {
+  private addEntry(deviceId: string): boolean {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO entries (added_at, added_by) VALUES (?, ?)",
+      Date.now(),
+      deviceId,
+    );
+    return true;
+  }
+
+  /** 取り消されていないエントリーを取り消す。存在しない・取り消し済みなら `false` */
+  private cancelEntry(entryId: number, deviceId: string): boolean {
+    const updated = this.ctx.storage.sql.exec(
+      "UPDATE entries SET cancelled_at = ?, cancelled_by = ? WHERE id = ? AND cancelled_at IS NULL",
+      Date.now(),
+      deviceId,
+      entryId,
+    );
+    return updated.rowsWritten > 0;
+  }
+
+  private entryCount(): number {
+    return this.ctx.storage.sql
+      .exec<{ count: number }>("SELECT COUNT(*) AS count FROM entries WHERE cancelled_at IS NULL")
+      .one().count;
+  }
+
+  private stateMessage({ clock, structure }: Tournament): TournamentServerMessage {
+    return { type: "state", clock, structure, entryCount: this.entryCount(), serverNow: Date.now() };
+  }
+
+  private entriesMessage(): TournamentServerMessage {
+    const entries = this.ctx.storage.sql
+      .exec<Entry>(
+        `SELECT e.id, e.added_at AS addedAt, a.number AS addedBy,
+                e.cancelled_at AS cancelledAt, c.number AS cancelledBy
+         FROM entries e
+         JOIN remotes a ON a.device_id = e.added_by
+         LEFT JOIN remotes c ON c.device_id = e.cancelled_by
+         ORDER BY e.id`,
+      )
+      .toArray();
+    return { type: "entries", entries };
+  }
+
+  /** 接続中の端末へ送る。`role` を指定すると、その役割の端末にだけ送る */
+  private broadcast(message: TournamentServerMessage, role?: Attachment["role"]): void {
+    for (const ws of this.ctx.getWebSockets(role)) {
       try {
         send(ws, message);
       } catch {
@@ -162,7 +229,7 @@ export class TournamentDurableObject extends DurableObject<Env> {
 
 function applyClockAction(
   { clock, structure }: Tournament,
-  action: Exclude<RemoteAction, { type: "pairSignage" }>,
+  action: Extract<RemoteAction, { type: "start" | "pause" | "resume" | "setRemaining" }>,
   now: number,
 ): ClockState {
   switch (action.type) {
@@ -175,10 +242,6 @@ function applyClockAction(
     case "setRemaining":
       return setRemaining(clock, structure, action.remainingMs, now);
   }
-}
-
-function stateMessage({ clock, structure }: Tournament): TournamentServerMessage {
-  return { type: "state", clock, structure, serverNow: Date.now() };
 }
 
 function send(ws: WebSocket, message: TournamentServerMessage): void {

@@ -125,3 +125,31 @@ input {
   font-size: 28px;
   cursor: grab;
 }
+
+.entry-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.entry-header h2 { margin: 0; }
+.entry-count { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.entry-list { list-style: none; margin: 12px 0 0; padding: 0; }
+.entry-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+}
+.entry-list li.cancelled { color: var(--muted); }
+.entry-list li.cancelled .entry-id { text-decoration: line-through; }
+.entry-id { font-weight: 600; min-width: 3em; font-variant-numeric: tabular-nums; }
+.entry-meta { flex: 1; color: var(--muted); }
+
+button.small { padding: 6px 10px; font-size: 13px; }
+button.link {
+  margin-top: 8px;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 14px;
+}
