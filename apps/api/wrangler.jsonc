@@ -1,11 +1,15 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
+  // 最上位の設定はローカル開発（wrangler dev）用。デプロイは環境（--env）を指定して行う
   "name": "quina-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
   "observability": { "enabled": true },
+  // APIには専用の公開URLを付けない。画面と同じホスト名の /api/* だけを受け持つ（ADR 0005）
+  "workers_dev": false,
+  "preview_urls": false,
   "vars": {
-    // ログインなしで大会を作れる開発用エンドポイント。ローカル開発（pnpm dev）でのみ true にする
+    // ログインなしで大会を作れる開発用エンドポイント。ローカル開発（pnpm dev）とStagingでのみ true にする
     "ALLOW_DEV_ENDPOINTS": "false"
   },
   "durable_objects": {
@@ -16,5 +20,25 @@
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["TournamentDurableObject", "PairingDurableObject"] }
-  ]
+  ],
+  "env": {
+    "staging": {
+      "name": "quina-api-staging",
+      "routes": [
+        { "pattern": "remote-staging.quina.poker/api/*", "zone_name": "quina.poker" },
+        { "pattern": "signage-staging.quina.poker/api/*", "zone_name": "quina.poker" }
+      ],
+      // Stagingは Cloudflare Access で利用者を制限しているため、開発用エンドポイントを有効にする
+      "vars": { "ALLOW_DEV_ENDPOINTS": "true" },
+      "durable_objects": {
+        "bindings": [
+          { "name": "TOURNAMENT", "class_name": "TournamentDurableObject" },
+          { "name": "PAIRING", "class_name": "PairingDurableObject" }
+        ]
+      },
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["TournamentDurableObject", "PairingDurableObject"] }
+      ]
+    }
+  }
 }

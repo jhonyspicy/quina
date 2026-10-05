@@ -3,6 +3,6 @@ export { randomId } from "./random-id.ts";
 export { createServerClock, type ServerClock } from "./server-clock.ts";
 export {
   connectTournament,
-  resolveApiOrigin,
+  resolveApiBaseUrl,
   toWebSocketUrl,
 } from "./tournament.ts";

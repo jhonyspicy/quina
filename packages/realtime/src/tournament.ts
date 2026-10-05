@@ -2,7 +2,8 @@ import { CLOSE_TOURNAMENT_NOT_FOUND, type TournamentServerMessage } from "@quina
 import { connect, type Connection, type ConnectionStatus } from "./connection.ts";
 
 type Options = {
-  apiOrigin: string;
+  /** APIのベースURL（例: `https://remote-staging.quina.poker/api`） */
+  apiBaseUrl: string;
   tournamentId: string;
   /** リモコンとして接続する場合は端末ID、サイネージなら `null` */
   deviceId: string | null;
@@ -18,7 +19,7 @@ export function connectTournament(options: Options): Connection {
   );
   const path = `/tournaments/${encodeURIComponent(options.tournamentId)}/ws?${params}`;
   return connect({
-    url: toWebSocketUrl(options.apiOrigin, path),
+    url: toWebSocketUrl(options.apiBaseUrl, path),
     onMessage: (data) => options.onMessage(data as TournamentServerMessage),
     onStatus: options.onStatus,
     onClose: (event) => {
@@ -30,14 +31,14 @@ export function connectTournament(options: Options): Connection {
 }
 
 /**
- * APIのオリジン。指定がなければ、画面を開いたホストの8787番ポート（wrangler dev）とする。
- * 同じLANのスマホから開いた場合も、そのPCのAPIへつながる。
+ * APIのベースURL。指定がなければ、画面と同じオリジンの `/api` とする。
+ * Staging・本番では同じホスト名の `/api/*` がAPIのWorkerへ、ローカルではViteがwrangler devへ振り分ける。
  */
-export function resolveApiOrigin(configured: string | undefined): string {
+export function resolveApiBaseUrl(configured: string | undefined): string {
   if (configured) return configured.replace(/\/$/, "");
-  return `${location.protocol}//${location.hostname}:8787`;
+  return `${location.origin}/api`;
 }
 
-export function toWebSocketUrl(apiOrigin: string, path: string): string {
-  return apiOrigin.replace(/^http/, "ws") + path;
+export function toWebSocketUrl(apiBaseUrl: string, path: string): string {
+  return apiBaseUrl.replace(/^http/, "ws") + path;
 }

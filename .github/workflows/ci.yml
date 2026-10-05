@@ -17,3 +17,30 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
+
+  # main へのpushでチェックが通ったら Staging へデプロイする（ADR 0005）。
+  # DNSの切り替えとAPIトークンの登録が済むまでは、リポジトリ変数 STAGING_DEPLOY_ENABLED を設定せずに止めておく
+  deploy-staging:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.STAGING_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://remote-staging.quina.poker
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      # 画面のCustom Domainが作るDNSレコードにAPIのRouteが乗るため、画面を先にデプロイする
+      - run: pnpm --filter @quina/remote deploy:staging
+      - run: pnpm --filter @quina/signage deploy:staging
+      - run: pnpm --filter @quina/api deploy:staging

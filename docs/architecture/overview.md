@@ -1,6 +1,6 @@
 # アーキテクチャ概要
 
-現在の実装に基づく構成を記す。採用した技術構成と理由は[ADR 0004](../adr/0004-cloudflare-durable-objects-and-initial-stack.md)を参照する。ADRで採用済みでも未実装の部分（D1、`apps/web`、デプロイ）は、実装時に本資料へ追記する。
+現在の実装に基づく構成を記す。採用した技術構成と理由は[ADR 0004](../adr/0004-cloudflare-durable-objects-and-initial-stack.md)を参照する。ADRで採用済みでも未実装の部分（D1、`apps/web`、本番環境）は、実装時に本資料へ追記する。環境とデプロイは[環境とデプロイ](environments.md)に記す。
 
 ## リポジトリ構成
 
@@ -38,5 +38,5 @@ TypeScriptで統一する。共通設定は `tsconfig.base.json` にあり、各
 - テストはVitestで書く。`apps/api` だけは、Workersのランタイム上でテストする `@cloudflare/vitest-plugin` の対応範囲に合わせてVitest 4を使う。
 - 依存パッケージのインストール時スクリプトは、`pnpm-workspace.yaml` の `allowBuilds` で許可したもの（esbuild、workerd）だけを実行する。公開から間もない版を避けるpnpmの既定の方針は緩めていない。
 - `apps/api/worker-configuration.d.ts` は `pnpm --filter @quina/api cf-typegen`（`wrangler types`）で生成する。`wrangler.jsonc` を変えたら作り直す。
-- CIはGitHub Actions（`.github/workflows/ci.yml`）で、`main` へのpushとプルリクエストごとに型チェックとテストを実行する。
+- CIはGitHub Actions（`.github/workflows/ci.yml`）で、`main` へのpushとプルリクエストごとに型チェックとテストを実行する。`main` へのpushでは、続けてStagingへデプロイする（[環境とデプロイ](environments.md)）。
 - Docker・Dev Containerは用意していない。

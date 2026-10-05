@@ -8,7 +8,7 @@ import {
   type Connection,
   type ConnectionStatus,
 } from "@quina/realtime";
-import { API_ORIGIN } from "./api.ts";
+import { API_BASE_URL } from "./api.ts";
 import { loadDeviceId } from "./device.ts";
 
 export type PairResult = { pin: string; ok: boolean };
@@ -31,7 +31,7 @@ export function useTournament(tournamentId: string) {
 
   useEffect(() => {
     const conn = connectTournament({
-      apiOrigin: API_ORIGIN,
+      apiBaseUrl: API_BASE_URL,
       tournamentId,
       deviceId,
       onStatus: setStatus,

@@ -5,14 +5,14 @@ import {
   connect,
   connectTournament,
   createServerClock,
-  resolveApiOrigin,
+  resolveApiBaseUrl,
   toWebSocketUrl,
   type ConnectionStatus,
 } from "@quina/realtime";
 import { loadTournamentId, saveTournamentId } from "./storage.ts";
 import { useNow } from "./useNow.ts";
 
-const API_ORIGIN = resolveApiOrigin(import.meta.env.VITE_API_ORIGIN);
+const API_BASE_URL = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
 
 export function App() {
   const [tournamentId, setTournamentId] = useState(loadTournamentId);
@@ -33,7 +33,7 @@ function Pairing({ onPaired }: { onPaired(tournamentId: string): void }) {
 
   useEffect(() => {
     const conn = connect({
-      url: toWebSocketUrl(API_ORIGIN, "/pairing/ws"),
+      url: toWebSocketUrl(API_BASE_URL, "/pairing/ws"),
       onStatus: (status) => {
         if (status !== "open") setPin(null);
       },
@@ -67,7 +67,7 @@ function Tournament({ tournamentId, onNotFound }: { tournamentId: string; onNotF
 
   useEffect(() => {
     const conn = connectTournament({
-      apiOrigin: API_ORIGIN,
+      apiBaseUrl: API_BASE_URL,
       tournamentId,
       deviceId: null,
       onStatus: setStatus,

@@ -26,10 +26,12 @@ apps/signage (React + Vite) ─WebSocket──┘                      └─ Pa
 
 | パス | 内容 |
 | --- | --- |
-| `POST /dev/tournaments` | 開発用。ログインなしで、固定ストラクチャー（20分×10レベル、`src/sample-structure.ts`）の大会を準備し、`{ tournamentId }` を返す。環境変数 `ALLOW_DEV_ENDPOINTS` が `"true"` のときだけ有効。`wrangler.jsonc` の既定値は `"false"` で、`pnpm dev` の起動時だけ `true` にする |
-| `GET /tournaments/:tournamentId/ws?role=signage` | サイネージとして大会のDurable ObjectへWebSocket接続する。`tournamentId` はUUID |
-| `GET /tournaments/:tournamentId/ws?role=remote&device=:deviceId` | リモコンとして接続する。`deviceId` は端末IDのUUID（小文字）で、ない・形式が違う場合は `400` |
-| `GET /pairing/ws` | 未接続サイネージのPIN待ち受け用WebSocket接続 |
+| `POST /api/dev/tournaments` | 開発用。ログインなしで、固定ストラクチャー（20分×10レベル、`src/sample-structure.ts`）の大会を準備し、`{ tournamentId }` を返す。環境変数 `ALLOW_DEV_ENDPOINTS` が `"true"` のときだけ有効。`wrangler.jsonc` の既定値は `"false"` で、`pnpm dev` の起動時とStagingだけ `true` にする |
+| `GET /api/tournaments/:tournamentId/ws?role=signage` | サイネージとして大会のDurable ObjectへWebSocket接続する。`tournamentId` はUUID |
+| `GET /api/tournaments/:tournamentId/ws?role=remote&device=:deviceId` | リモコンとして接続する。`deviceId` は端末IDのUUID（小文字）で、ない・形式が違う場合は `400` |
+| `GET /api/pairing/ws` | 未接続サイネージのPIN待ち受け用WebSocket接続 |
+
+APIのパスはすべて `/api/` で始まる。画面は自分と同じオリジンの `/api` を呼び、ローカルではVite、Stagingではルートの振り分けによりAPIのWorkerへ届く（[環境とデプロイ](environments.md)）。
 
 大会IDを知っていればリモコンとして接続できる。大会IDはUUIDで推測されにくいことに依存しており、QRの有効期間や失効などの接続管理は未実装。
 
@@ -112,7 +114,7 @@ PIN → 未接続サイネージ: `pin`（表示するPIN）、`paired`（接続
 
 ## サイネージのPIN接続
 
-1. 大会に未接続のサイネージは `/pairing/ws` に接続する。Workerは六桁のPINを無作為に選び、そのPINの `PairingDurableObject` へ接続を渡す。そのPINがすでに使用中なら別のPINで最大10回まで選び直す。
+1. 大会に未接続のサイネージは `/api/pairing/ws` に接続する。Workerは六桁のPINを無作為に選び、そのPINの `PairingDurableObject` へ接続を渡す。そのPINがすでに使用中なら別のPINで最大10回まで選び直す。
 2. `PairingDurableObject` はPINをサイネージへ送り、WebSocketを保持する。
 3. リモコンが `pairSignage` を送ると、`TournamentDurableObject` がPINの `PairingDurableObject` の `claim(tournamentId)` を呼ぶ。PINを表示中のサイネージがあれば大会IDを送って切断し、`true` を返す。
 4. サイネージは受け取った大会IDをブラウザの `localStorage` に保存し、大会のWebSocketへ接続し直す。
@@ -132,7 +134,7 @@ PIN → 未接続サイネージ: `pin`（表示するPIN）、`paired`（接続
 ## 画面
 
 - リモコンアプリはURLのクエリで画面を切り替える。
-  - クエリなし: 開発用の大会準備ボタン。押すと `POST /dev/tournaments` で大会を準備し、`?setup=` に移る。
+  - クエリなし: 開発用の大会準備ボタン。押すと `POST /api/dev/tournaments` で大会を準備し、`?setup=` に移る。
   - `?setup=:tournamentId`: 開発用の準備画面。管理画面の代わりに、リモコンのURL（`?t=:tournamentId`）を表すQRコードとURLを表示する。QRは `uqr` でSVGとして作る。再表示しても大会は準備し直さない。`localhost` などで開いている場合は、QRのURLを他の端末から開けないことを表示する。
   - `?t=:tournamentId`: リモコン。QRの有効期限・失効・再発行は未実装で、URLを知っていれば誰でもリモコンとして接続できる。開始は「スライドして開始」で、つまみを端の90%以上まで動かすと開始を送る（タップだけでは開始しない。キーボードでは右矢印キーで動かせる）。一時停止・再開は通常のボタン。残り時間は分と秒で入力する。エントリーは人数と追加ボタン、新しい順の一覧（初期表示は5件）を表示し、各エントリーの取消ボタンは確認ダイアログを経て取り消す。
 - サイネージは開始前に待機画面とエントリー数、開始後にレベル・残り時間・エントリー数を表示する。最終レベルが終わると「最終レベル終了」と表示する。
@@ -140,9 +142,9 @@ PIN → 未接続サイネージ: `pin`（表示するPIN）、`paired`（接続
 ## ローカル開発
 
 - `pnpm dev` で、API（`wrangler dev`、8787番）、リモコン（5173番）、サイネージ（5174番）を同時に起動する。
-- 画面は、開いたホスト名の8787番ポートをAPIとみなす。同じLANのスマホからPCのIPアドレスで画面を開くと、そのPCのAPIへ接続する。別のAPIを使う場合は環境変数 `VITE_API_ORIGIN` で指定する。
+- リモコン・サイネージのVite開発サーバーは、`/api` へのアクセス（WebSocketを含む）をwrangler devへ振り分ける。同じLANのスマホからは、PCのIPアドレスで画面のポート（5173番・5174番）だけを開けばよい。
 - `wrangler dev` のDurable Objectのデータは `apps/api/.wrangler/` に保存され、APIを再起動しても残る。
 
 ## テスト
 
-`apps/api/test/` に、Workersのランタイム上で動く結合テストがある（`@cloudflare/vitest-plugin`、Vitest 4）。他のパッケージはVitest 5を使う。デプロイの設定は未実装。
+`apps/api/test/` に、Workersのランタイム上で動く結合テストがある（`@cloudflare/vitest-plugin`、Vitest 4）。他のパッケージはVitest 5を使う。デプロイは[環境とデプロイ](environments.md)に記す。

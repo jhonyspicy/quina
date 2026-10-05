@@ -45,19 +45,19 @@ async function openSocket<T extends Message>(path: string): Promise<Socket<T>> {
 }
 
 async function createTournament(): Promise<string> {
-  const response = await SELF.fetch(`${ORIGIN}/dev/tournaments`, { method: "POST" });
+  const response = await SELF.fetch(`${ORIGIN}/api/dev/tournaments`, { method: "POST" });
   expect(response.status).toBe(201);
   const { tournamentId } = await response.json<{ tournamentId: string }>();
   return tournamentId;
 }
 
 const connectSignage = (id: string) =>
-  openSocket<TournamentServerMessage>(`/tournaments/${id}/ws?role=signage`);
+  openSocket<TournamentServerMessage>(`/api/tournaments/${id}/ws?role=signage`);
 
 /** リモコンとして接続し、最初に届く識別番号を受け取る */
 async function connectRemote(id: string, deviceId: string = crypto.randomUUID()) {
   const socket = await openSocket<TournamentServerMessage>(
-    `/tournaments/${id}/ws?role=remote&device=${deviceId}`,
+    `/api/tournaments/${id}/ws?role=remote&device=${deviceId}`,
   );
   const welcome = await socket.next("welcome");
   return {
@@ -73,7 +73,7 @@ async function connectRemote(id: string, deviceId: string = crypto.randomUUID())
 
 describe("開発用の大会作成", () => {
   it("ALLOW_DEV_ENDPOINTS が true でなければ使えない", async () => {
-    const request = new Request<unknown, IncomingRequestCfProperties>(`${ORIGIN}/dev/tournaments`, {
+    const request = new Request<unknown, IncomingRequestCfProperties>(`${ORIGIN}/api/dev/tournaments`, {
       method: "POST",
     });
     const response = await worker.fetch(request, { ...env, ALLOW_DEV_ENDPOINTS: "false" });
@@ -161,7 +161,7 @@ describe("PINによるサイネージの接続", () => {
     const remote = await connectRemote(id);
     await remote.next("state");
 
-    const signage = await openSocket<PairingServerMessage>("/pairing/ws");
+    const signage = await openSocket<PairingServerMessage>("/api/pairing/ws");
     const { pin } = await signage.next("pin");
     expect(pin).toMatch(/^\d{6}$/);
 
@@ -200,7 +200,7 @@ describe("リモコンの識別番号", () => {
 
   it("端末IDのないリモコン接続は受け付けない", async () => {
     const id = await createTournament();
-    const response = await SELF.fetch(`${ORIGIN}/tournaments/${id}/ws?role=remote`, {
+    const response = await SELF.fetch(`${ORIGIN}/api/tournaments/${id}/ws?role=remote`, {
       headers: { Upgrade: "websocket" },
     });
     expect(response.status).toBe(400);

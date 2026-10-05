@@ -4,14 +4,15 @@ import { PIN_HEADER } from "./pairing.ts";
 export { PairingDurableObject } from "./pairing.ts";
 export { TournamentDurableObject } from "./tournament.ts";
 
-const TOURNAMENT_WS_PATH = /^\/tournaments\/([0-9a-f-]{36})\/ws$/;
+/** APIのパスはすべて `/api/` で始まる。画面と同じホスト名の `/api/*` がこのWorkerへ振り分けられる */
+const TOURNAMENT_WS_PATH = /^\/api\/tournaments\/([0-9a-f-]{36})\/ws$/;
 const PIN_ATTEMPTS = 10;
 
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === "/dev/tournaments") {
+    if (url.pathname === "/api/dev/tournaments") {
       return handleDevCreateTournament(request, env);
     }
 
@@ -21,7 +22,7 @@ export default {
       return env.TOURNAMENT.getByName(tournamentMatch[1]!).fetch(request);
     }
 
-    if (url.pathname === "/pairing/ws") {
+    if (url.pathname === "/api/pairing/ws") {
       if (!isWebSocketUpgrade(request)) return new Response("expected websocket", { status: 426 });
       return connectPairing(request, env);
     }
@@ -33,13 +34,11 @@ export default {
 /** 開発用: ログインなしで固定ストラクチャーの大会を準備する */
 async function handleDevCreateTournament(request: Request, env: Env): Promise<Response> {
   if (env.ALLOW_DEV_ENDPOINTS !== "true") return new Response("not found", { status: 404 });
-  const cors = { "Access-Control-Allow-Origin": "*" };
-  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-  if (request.method !== "POST") return new Response("method not allowed", { status: 405, headers: cors });
+  if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
 
   const tournamentId = crypto.randomUUID();
   await env.TOURNAMENT.getByName(tournamentId).prepare(tournamentId, SAMPLE_STRUCTURE);
-  return Response.json({ tournamentId }, { status: 201, headers: cors });
+  return Response.json({ tournamentId }, { status: 201 });
 }
 
 /** 使用中でないPINを選び、そのPINのDurable ObjectへWebSocket接続を渡す */

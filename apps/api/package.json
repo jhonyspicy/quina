@@ -7,7 +7,8 @@
     "dev": "wrangler dev --ip 0.0.0.0 --var ALLOW_DEV_ENDPOINTS:true",
     "cf-typegen": "wrangler types --strict-vars=false",
     "typecheck": "tsc -p . && tsc -p test",
-    "test": "vitest run"
+    "test": "vitest run",
+    "deploy:staging": "wrangler deploy --env staging"
   },
   "dependencies": {
     "@quina/clock": "workspace:*",
