@@ -59,9 +59,10 @@
 ### 2. デプロイ用のAPIトークンを登録する
 
 1. Cloudflareの管理画面のAPIトークンの作成画面で、テンプレート「Edit Cloudflare Workers」を選ぶ。
-2. 対象のアカウントを自分のアカウントだけに、対象のゾーンを `quina.poker` だけに絞って作成する。
-3. 作成したトークンを、GitHubのリポジトリのSecrets `CLOUDFLARE_API_TOKEN` に登録する。トークンはリポジトリのファイルに書かない。
-4. CloudflareのアカウントIDを、Secrets `CLOUDFLARE_ACCOUNT_ID` に登録する。
+2. 権限から、R2の編集（Workers R2 Storage）とKVの編集（Workers KV Storage）を外す。CIはR2へ書き込まない（[ADR 0006](../adr/0006-theme-assets-in-r2-with-lockfile.md)）ため、このトークンにR2への書き込み権限を持たせない。KVは使っていない。
+3. 対象のアカウントを自分のアカウントだけに、対象のゾーンを `quina.poker` だけに絞って作成する。
+4. 作成したトークンを、GitHubのリポジトリのSecrets `CLOUDFLARE_API_TOKEN` に登録する（Settings → Secrets and variables → Actions → New repository secret）。トークンはリポジトリのファイルに書かない。
+5. CloudflareのアカウントID（管理画面のURLの `dash.cloudflare.com/` の直後の32文字）を、Secrets `CLOUDFLARE_ACCOUNT_ID` に登録する。
 
 Custom Domainの作成で権限が足りないと表示された場合は、ゾーン `quina.poker` に対する権限（DNSの編集など）をトークンに追加する。
 
